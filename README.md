@@ -6,6 +6,8 @@ Application of kynodynamical motion planning algorithms to perform attitude mane
 
 todo
 
+Named after the 10c. illuminator/cartographer Ende.
+
 ## Authors
 
 Developed by Mark Stephenson as a final project for CU Boulder's ASEN 5254: Algorithmic Motion Planning in Fall of 2022, taught by Morteza Lahijanian.
