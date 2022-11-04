@@ -6,18 +6,14 @@ using Quaternions
 using Random
 using Rotations
 
-using Makie.GeometryBasics
-using GLMakie
-using FileIO
-
 Quaternion = Quaternions.Quaternion
-Axis = GLMakie.Axis
 
-randquat() = normalize(Quaternion(randn(4)...))
+# Random Element Generation Functions
+randquat() = normalize(Quaternion(randn(4)...)) # random unit quaternion
 
-randunit(n = 3) = normalize([randn(n)...])
+randunit(n) = normalize([randn(n)...]) # random point on n-sphere
 
-function randinunit(n = 2)
+function randinunit(n) # random point in n-sphere
     while true
         v = 2*rand(n).-1
         if norm(v) ≤ 1
@@ -26,14 +22,23 @@ function randinunit(n = 2)
     end
 end
 
+# Utilities
 fromscalarlast(q) = Quaternion(q[4], q[1], q[2], q[3])
 toscalarlast(q) = [q.v1; q.v2; q.v3; q.s]
 
 Ξ(q) = [q.s -q.v3 q.v2; q.v3 q.s -q.v1; -q.v2 q.v1 q.s; -q.v1 -q.v2 -q.v3]
 
+function angle(a, b)
+    return acos(clamp(a⋅b/(norm(a)*norm(b)), -1, 1))
+end
+
+# Distance Metrics
 function dist(x1, x2, α = 5)
-    # dq = conj(fromscalarlast(x1.q)) * fromscalarlast(x2.q)
-    # dangle = abs(rotation_angle(QuatRotation(normalize(dq))))
+    """
+    Distance metric between (q, ω) states
+        eigangle(q₁,q₂) + α * norm(ω₁-ω₂)
+    """
+
     qw = max(min(x1.q⋅x2.q,1.),-1.)
     dangle = abs(2*acos(qw))
 
@@ -43,8 +48,12 @@ function dist(x1, x2, α = 5)
 end
 
 function distB(x1, x2, B, α=5, ϵ=1, β=1)
-    # dq = conj(fromscalarlast(x1.q)) * fromscalarlast(x2.q)
-    # dangle = abs(rotation_angle(QuatRotation(normalize(dq))))
+    """
+    Distance metric between (q, ω) states that penalizes out of B plane error
+        eigangle(q₁,q₂) * (1 + ϵ * eigangleₒₒₚ(q₁,q₂))
+        + α * norm(ω₁-ω₂) * (1 + β * normₒₒₚ(ω₁-ω₂))
+    """
+
     if ϵ==β==0
         return dist(x1, x2, α)
     end
@@ -68,6 +77,7 @@ function distB(x1, x2, B, α=5, ϵ=1, β=1)
     return cost
 end
 
+# Problem Definition Elements
 struct Keepout
     sensor::Vector
     obstacle::Vector
@@ -87,7 +97,6 @@ struct AttitudeProblem
     keepouts::Vector{Keepout}
 end
 
-# TODO include Bhat
 AttitudeProblem(B::Vector, m_max::Real, J::Matrix, ωmax::Real) = AttitudeProblem(B, m_max, J, inv(J), randquat(), [0.0; 0.0; 0.0], Quaternion(1.), [0.0; 0.0; 0.0], ωmax, Keepout[])
 AttitudeProblem(B::Vector, m_max::Real, J::Matrix, ωmax::Real, qstart::Quaternion) = AttitudeProblem(B, m_max, J, inv(J), qstart, [0.0; 0.0; 0.0], Quaternion(1.), [0.0; 0.0; 0.0], ωmax, Keepout[])
 AttitudeProblem(B::Vector, m_max::Real, J::Matrix, ωmax::Real, qstart::Quaternion, keepouts::Vector{Keepout}) = AttitudeProblem(B, m_max, J, inv(J), qstart, [0.0; 0.0; 0.0], Quaternion(1.), [0.0; 0.0; 0.0], ωmax, keepouts)
@@ -95,12 +104,17 @@ AttitudeProblem(B::Vector, m_max::Real, J::Matrix, ωmax::Real, qstart::Quaterni
 statestart(prob::AttitudeProblem) = ComponentArray(q = toscalarlast(prob.qstart), ω = prob.ωstart)
 stategoal(prob::AttitudeProblem) = ComponentArray(q = toscalarlast(prob.qgoal), ω = prob.ωgoal)
 
-
 struct ControlledAttitudeProblem
     prob::AttitudeProblem
     u::Function
 end
 
+struct ControlCommand
+    t::Real
+    u::Vector
+end
+
+# System Dynamics
 function eulereqns(dx, x, params, t)
     """
     Derivative of Euler equations with intertially fixed dipole in constant B field
@@ -126,10 +140,6 @@ function eulereqns(dx, x, params, t)
     return nothing
 end
 
-function angle(a, b)
-    return acos(clamp(a⋅b/(norm(a)*norm(b)), -1, 1))
-end
-
 function stepstate(state, u, t, prob::AttitudeProblem)
     ufun(t) = u
     params = ControlledAttitudeProblem(prob, ufun)
@@ -152,6 +162,7 @@ function stepstate(state, u, t, prob::AttitudeProblem)
     sol.u[end], true
 end
 
+# Roadmap Traversal
 function pathto(roadmap, istate)
     path = [istate]
     while path[1] != 1
@@ -160,11 +171,9 @@ function pathto(roadmap, istate)
     return path
 end
 
-struct ControlCommand
-    t::Real
-    u::Vector
-end
+timecost(roadmap, controls, istate) = sum([control.t for control in controls[pathto(roadmap, istate)]])
 
+# Search Functions
 function dynamicrrt(prob, samplecontrol::Function, samplestate::Function, sampletime::Function, dist::Function, n, ϵ, pbias, k)
     xstart = statestart(prob)
     xgoal = stategoal(prob)
@@ -240,7 +249,6 @@ function dynamicrrt(prob, samplecontrol::Function, samplestate::Function, sample
     return path, roadmap, states, controls
 end
 
-# SST FUNCTIONS
 function sst(prob, samplecontrol::Function, samplestate::Function, sampletime::Function, dist::Function, n, ϵ, δbn, δₛ, pbias)
     # Currently assumes time is cost
     xstart = statestart(prob)
@@ -332,206 +340,31 @@ function sst(prob, samplecontrol::Function, samplestate::Function, sampletime::F
     @info "Path length:" sum([control.t for control in controls[path]])
 
     return path, roadmap, states, controls
-
 end
 
-# Execute Problem
-Bmag = 0.5e-4 # Teslas (kg/As^2)
-# B_hat = randunit()
-B_hat = [0.; 0.; 1.]
-B_I = B_hat * Bmag
-
-m_max = 0.66 # A*m^2
-
-J = [41.87 0.0 0.0; 0.0 41.87 0.0; 0.0 0.0 6.67] * 1e-3 # kg*m^2
-
-ωmax = 20*π/180
-
-prob = AttitudeProblem(B_I, m_max, J, ωmax, Quaternion(0.,0.,0.,1.), [Keepout([0.,0.,-1.],[-1.,0.,0.],50*π/180),Keepout(normalize([1.,1.,0.]),[0.,-1.,0.],20*π/180)])
-prob = AttitudeProblem(B_I, m_max, J, ωmax, Quaternion(0.,0.,0.,1.), Keepout[])
-# prob = AttitudeProblem(B_I, m_max, J, ωmax)
-
-
-samplestate() = ComponentArray(q = toscalarlast(randquat()), ω = randinunit(3) * ωmax)
-samplecontrol() = randinunit(2)
-sampletime() = rand()*10
-distfn(x1, x2) = distB(x1, x2, prob.B, 5, 0, 0)
-
-n = 10000
-ϵ = 0.10
-
-pbias = 0.10
-k = 25
-
-# path, roadmap, states, controls = dynamicrrt(prob, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, k)
-
-
-δₛ = 0.025
-δbn = 2δₛ
-path, roadmap, states, controls = sst(prob, samplecontrol, samplestate, sampletime, distfn, n, ϵ, δbn, δₛ, pbias)
-
-
-# High-res solution
-framerate = 10
-timefactor = 10
-
-tcontrols = cumsum([control.t for control in controls[path]])
-tmax = tcontrols[end]
-function ufun(t)
-    if t == 0.0
-        return controls[path[2]].u
+# Postprocessing Functions
+function controlfnfactory(path, controls)
+    tcontrols = cumsum([control.t for control in controls[path]])
+    tmax = tcontrols[end]
+    function ufun(t)
+        if t == 0.0
+            return controls[path[2]].u
+        end
+        icontrol = findfirst(t .< tcontrols)
+        if isnothing(icontrol)
+            return [0.,0.]
+        end
+        return controls[path[icontrol]].u
     end
-    icontrol = findfirst(t .< tcontrols)
-    if isnothing(icontrol)
-        return [0.,0.]
+    return ufun, tmax
+end
+
+function resamplesolution(prob, ufun, tmax, saveat=1, comparison=nothing)
+    params = ControlledAttitudeProblem(prob, ufun)
+    ode = ODEProblem(eulereqns, statestart(prob), (0, tmax), params)
+    sol = solve(ode, reltol = 1e-7, abstol = 1e-9, saveat=saveat) #, tstops=tcontrols)
+    if !isnothing(comparison)
+        @info "Integrated difference should be small" dist(sol.u[end], comparison)
     end
-    return controls[path[icontrol]].u
+    return sol
 end
-
-params = ControlledAttitudeProblem(prob, ufun)
-ode = ODEProblem(eulereqns, statestart(prob), (0, tmax), params)
-sol = solve(ode, reltol = 1e-7, abstol = 1e-9, saveat=timefactor/framerate, tstops=tcontrols)
-@info "Integrated difference should be small" dist(sol.u[end], states[path[end]])
-
-# Plotting
-tstamp = Observable(1)
-sat = load("2RU-GenericCubesat.stl")
-
-fig = Figure(resolution=(1280,1280))
-ax = Axis3(fig[1,1], aspect = :data, title = @lift("t = $(round(sol.t[$tstamp], digits = 1))"))
-xlims!(ax,(-3.,3))
-ylims!(ax,(-3.,3))
-zlims!(ax,(-3.,3))
-
-# q = normalize(fromscalarlast(xgoal.q))
-# wireframe!(ax, GeometryBasics.Mesh([QuatRotation(q)*p for p in sat.position],faces(sat)), color=(:black,0.025))
-
-arrows!(ax,[Point3([0.; 0.; 0.])], [Point3(B_hat)], color=:green, lengthscale=2, label="B")
-
-ωvec = @lift( [Point3( (QuatRotation(normalize(inv(fromscalarlast(sol.u[$tstamp].q)))) * sol.u[$tstamp].ω)... )] )
-arrows!(ax, [Point3([0.; 0.; 0.])], ωvec, color=:purple, lengthscale=20, label="ω")
-
-Bx = normalize((B_hat × [1.0, 0.0, 0.0]) × B_hat)
-By = B_hat × Bx
-uvec = @lift( [Point3( ufun(sol.t[$tstamp])[1].*Bx + ufun(sol.t[$tstamp])[2].*By )] )
-arrows!(ax, [Point3([0.; 0.; 0.])], uvec, color=:red, lengthscale=2, label="m")
-Lvec = @lift( [Point3( (ufun(sol.t[$tstamp])[1].*Bx + ufun(sol.t[$tstamp])[2].*By) × B_hat)] )
-ωvecscale = @lift( $ωvec.*20 )
-arrows!(ax, ωvecscale, Lvec, color=:blue, lengthscale=2, label="L")
-
-rotm = @lift( QuatRotation(normalize(inv(fromscalarlast(sol.u[$tstamp].q)))) )
-
-keepoutcolors = [:yellow, :orange, :pink]
-for (keepout, color) in zip(prob.keepouts, keepoutcolors)
-    sensorvec = @lift( [$rotm*keepout.sensor] )
-    arrows!(ax, [Point3([0.; 0.; 0.])], sensorvec, color=color, lengthscale=2, label="sensor")
-
-    for θ in 0:0.03:2π
-        r = 3.
-        obstacle = keepout.obstacle
-        halfangle = keepout.halfangle
-        d = r/tan(halfangle)
-
-        rx = abs.(obstacle) == [0.0, 0.0, 1.0] ? [1.0, 0.0, 0.0] : obstacle×[0.0, 0.0, 1.0]
-
-        ry = obstacle×rx
-
-        point = obstacle*d + r*cos(θ)*rx + r*sin(θ)*ry
-        # @show point
-        lines!(ax, [Point3([0.; 0.; 0.]), Point3(point)], color=(color,0.5))
-    end
-end
-
-satrot = @lift(GeometryBasics.Mesh([$rotm*p for p in sat.position],faces(sat)))
-mesh!(ax, satrot, color=(:grey, 0.2))
-
-
-timestamps = 1:length(sol.t)
-
-record(fig, "time_animation.mp4", timestamps;
-        framerate = framerate) do t
-    tstamp[] = t
-end
-@info "Animation saved!"
-
-fig = Figure()
-ax1 = Axis(fig[1,1])
-[lines!(ax1, sol.t, [(QuatRotation(normalize(inv(fromscalarlast(x.q))))*x.ω)[i]*180/π for x in sol.u]) for i in 1:3]
-ax1.ylabel = "ω [deg/s]"
-
-ax2 = Axis(fig[2,1])
-[lines!(ax2, sol.t, [ufun(t)[i] for t in sol.t]) for i in 1:2]
-ax2.ylabel = "u [-]"
-
-ax3 = Axis(fig[3,1])
-[lines!(ax3, sol.t, [x.q[i] for x in sol.u]) for i in 1:4]
-ax3.ylabel = "q [-]"
-
-ax3.xlabel = "Time [s]"
-
-linkxaxes!(ax1,ax2,ax3)
-
-save("results.png", fig)
-
-
-
-#
-# n = 5000
-# ϵ = 0.10
-# # pbiases = [0.05, 0.1, 0.25]
-# pbias = 0.10
-# dt = 10
-# # ks = [5, 25, 100]
-# k = 25
-# α = 5
-# f1() = randinunit(2)
-# f2() = randunit(2)
-# samplecontrols = [f1, f2]
-#
-# ntrials = 50
-# lengths = Dict()
-# errors = Dict()
-# times = Dict()
-# for i in 1:2
-#     lengths[i] = zeros(ntrials)
-#     errors[i] = zeros(ntrials)
-#     times[i] = zeros(ntrials)
-# end
-#
-# Threads.@threads for i in 1:ntrials
-#     prob = AttitudeProblem(B_I, m_max, J)
-#     for (f, samplecontrol) in enumerate(samplecontrols)
-#         @info "Testing" samplecontrol i
-#         t0 = time()
-#         path, roadmap, states, controls = dynamicrrt(prob, samplecontrol, DIST_TODO samplestate, n, ϵ, pbias, dt, k)
-#         telapsed = time()-t0
-#         lengths[f][i] = length(path)
-#         errors[f][i] = dist(states[path[end]], stategoal(prob))
-#         times[f][i] = telapsed
-#     end
-# end
-#
-# fig = Figure()
-# ax1 = Axis(fig[1,1])
-# xs = collect(Iterators.flatten([repeat([k*1.0], length(lengths[k])) for k in 1:2]))
-# ys = collect(Iterators.flatten([lengths[k]*1.0 for k in 1:2]))
-# boxplot!(ax1, xs, ys, width=0.5)
-# ax1.xlabel = "f"
-# ax1.ylabel = "length"
-# # ax1.xticks = pbiases
-#
-# ax2 = Axis(fig[2,1])
-# xs = collect(Iterators.flatten([repeat([k*1.0], length(errors[k])) for k in 1:2]))
-# ys = collect(Iterators.flatten([errors[k]*1.0 for k in 1:2]))
-# boxplot!(ax2, xs, ys, width=0.5)
-# ax2.xlabel = "f"
-# ax2.ylabel = "error"
-# # ax2.xticks = pbiases
-#
-# ax3 = Axis(fig[3,1])
-# xs = collect(Iterators.flatten([repeat([k*1.0], length(times[k])) for k in 1:2]))
-# ys = collect(Iterators.flatten([times[k]*1.0 for k in 1:2]))
-# boxplot!(ax3, xs, ys, width=0.5)
-# ax3.xlabel = "f"
-# ax3.ylabel = "time"
-# # ax3.xticks = pbiases
