@@ -31,16 +31,16 @@ function roadmapplot3d(ax::Axis3, path, roadmap, states, controls, prob::Attitud
     ω_path = [dist(states[p], stategoal(prob), 1e10)/1e10 for p in path]
     ang_path = [dist(states[p], stategoal(prob), 0) for p in path]
 
-    linesegments!(ax, t_rm, ω_rm, ang_rm, color=(:lightgrey, 0.5), transparency=true)
-    lines!(ax, t_path, ω_path, ang_path, color=:red)
+    linesegments!(ax, t_rm, ω_rm*180/π, ang_rm*180/π, color=(:lightgrey, 0.5), transparency=true)
+    lines!(ax, t_path, ω_path*180/π, ang_path*180/π, color=:red)
     lines!(ax, [0, max(t_rm...)], [0,0], [0,0], color=:green)
     ax.xlabel = "Path Length [s]"
-    ax.ylabel = "Angle Rate Error [rad/s]"
-    ax.zlabel = "Angle Error [rad]"
+    ax.ylabel = "Angle Rate Error [deg/s]"
+    ax.zlabel = "Angle Error [deg]"
     return ax
 end
 
-function saveanimation(sol, ufun::Function, prob::AttitudeProblem, path, framerate, resolution=(1280,1280))
+function saveanimation(sol, ufun::Function, prob::AttitudeProblem, saveas, framerate, resolution=(1280,1280))
     fig = Figure(resolution=resolution)
     sat = load("dependencies/2RU-GenericCubesat.stl")
 
@@ -51,7 +51,7 @@ function saveanimation(sol, ufun::Function, prob::AttitudeProblem, path, framera
     ylims!(ax,(-3.,3))
     zlims!(ax,(-3.,3))
 
-    B_hat = normalized(prob.B)
+    B_hat = normalize(prob.B)
 
     arrows!(ax,[Point3([0.; 0.; 0.])], [Point3(B_hat)], color=:green, lengthscale=2, label="B")
 
@@ -68,12 +68,12 @@ function saveanimation(sol, ufun::Function, prob::AttitudeProblem, path, framera
 
     rotm = @lift( QuatRotation(normalize(inv(fromscalarlast(sol.u[$tstamp].q)))) )
 
-    keepoutcolors = [:yellow, :orange, :pink]
+    keepoutcolors = [:yellow, :orange, :pink] # TODO associate with keepout
     for (keepout, color) in zip(prob.keepouts, keepoutcolors)
         sensorvec = @lift( [$rotm*keepout.sensor] )
         arrows!(ax, [Point3([0.; 0.; 0.])], sensorvec, color=color, lengthscale=2, label="sensor")
 
-        for θ in 0:0.03:2π
+        for θ in LinRange(0.,2π,200)
             r = 3.
             obstacle = keepout.obstacle
             halfangle = keepout.halfangle
@@ -85,7 +85,7 @@ function saveanimation(sol, ufun::Function, prob::AttitudeProblem, path, framera
 
             point = obstacle*d + r*cos(θ)*rx + r*sin(θ)*ry
             # @show point
-            lines!(ax, [Point3([0.; 0.; 0.]), Point3(point)], color=(color,0.5))
+            lines!(ax, [Point3([0.; 0.; 0.]), Point3(point)], color=(color,0.5), transparency=true)
         end
     end
 
@@ -94,9 +94,57 @@ function saveanimation(sol, ufun::Function, prob::AttitudeProblem, path, framera
 
     timestamps = 1:length(sol.t)
 
-    record(fig, path, timestamps;
+    record(fig, saveas, timestamps;
             framerate = framerate) do t
         tstamp[] = t
     end
-    @info "Animation saved!"
+    @info "Animation saved!" saveas
+end
+
+function latlongkeepout(ax, sol, prob::AttitudeProblem)
+    keepoutcolors = [:gold, :orange, :pink]
+    xlims!(ax, -180, 180)
+    ylims!(ax, -90, 90)
+
+    for (keepout, color) in zip(prob.keepouts, keepoutcolors)
+        points = Point2[]
+        for θ in LinRange(0.,2π,200)
+            obstacle = keepout.obstacle
+            halfangle = keepout.halfangle
+
+            d = 1/tan(halfangle)
+            rx = abs.(obstacle) == [0.0, 0.0, 1.0] ? [1.0, 0.0, 0.0] : obstacle×[0.0, 0.0, 1.0]
+            ry = obstacle×rx
+            point = obstacle*d + cos(θ)*rx + sin(θ)*ry
+
+            newlong = atand(point[2],point[1])
+            pointadd = Point2(0,0)
+            if length(points) > 0 && abs(points[end][1]-newlong)>90
+                pointadd = Point2(360,0)*sign(points[end][1]-newlong)
+            end
+            push!(points, Point2(atand(point[2],point[1]), atand(point[3], norm(point[1:2])))+pointadd)
+        end
+        poly!(ax, points, color=color, strokecolor=:black)
+        poly!(ax, points.+Point2(360,0), color=color, strokecolor=:black)
+        poly!(ax, points.+Point2(-360,0), color=color, strokecolor=:black)
+    end
+
+    for (keepout, color) in zip(prob.keepouts, keepoutcolors)
+        longs = Real[]
+        lats = Real[]
+        for (t, x) in zip(sol.t, sol.u)
+            rotm = QuatRotation(normalize(inv(fromscalarlast(x.q))))
+            sensorvec = rotm*keepout.sensor
+            newlong = atand(sensorvec[2],sensorvec[1])
+            if length(longs) > 0 && abs(longs[end]-newlong)>90
+                push!(longs, NaN)
+                push!(lats, NaN)
+            end
+            push!(longs, newlong)
+            push!(lats, atand(sensorvec[3], norm(sensorvec[1:2])))
+        end
+        lines!(ax, longs, lats, color=color)
+    end
+    ax.xlabel = "Longitude [deg]"
+    ax.ylabel = "Latitude [deg]"
 end
