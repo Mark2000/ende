@@ -59,3 +59,116 @@
 # ax3.xlabel = "f"
 # ax3.ylabel = "time"
 # # ax3.xticks = pbiases
+
+
+function sst(
+    prob,
+    samplecontrol::Function,
+    samplestate::Function,
+    sampletime::Function,
+    dist::Function,
+    n,
+    ϵ,
+    δbn,
+    δₛ,
+    pbias,
+)
+    # Currently assumes time is cost
+    xstart = statestart(prob)
+    xgoal = stategoal(prob)
+
+    states = [xstart]
+    controls = [ControlCommand(0.0, [0.0; 0.0])]
+    path = []
+    roadmap = Dict()
+
+    Vactive = [1]
+    Vinactive = Integer[]
+    S = Dict{Int,Union{Int,Nothing}}(1 => 1)
+
+    function cost(istate)
+        path = pathto(roadmap, istate)
+        sum([control.t for control in controls[path]])
+    end
+
+    imin = 1
+    for iter = 1:n
+        if mod(iter, 1000) == 0
+            @info "on step" iter
+        end
+
+        # Best First SST
+        if rand() < pbias
+            xrand = xgoal
+        else
+            xrand = samplestate()
+        end
+        Inear = [i for i in Vactive if dist(xrand, states[i]) < δbn]
+        isel =
+            isempty(Inear) ?
+            Vactive[argmin([dist(x, xrand) for x in states[Vactive]])] :
+            Inear[argmin([cost(i) for i in Inear])]
+        xsel = states[isel]
+
+        u = samplecontrol()
+        dt = sampletime()
+        xnew, valid = stepstate(xsel, u, dt, prob)
+
+        if valid
+            push!(states, xnew)
+            push!(controls, ControlCommand(dt, u))
+            ixnew = length(states)
+
+            # Is node locally the best
+            isnodelocalbest = false
+            isnew = collect(keys(S))[argmin([
+                dist(x, xnew) for x in states[collect(keys(S))]
+            ])]
+            if dist(states[isnew], xnew) > δₛ
+                isnew = ixnew
+                S[isnew] = nothing
+            end
+            ixpeer = S[isnew]
+            if isnothing(ixpeer) || cost(isel) + dt < cost(ixpeer)
+                isnodelocalbest = true
+            end
+
+            if isnodelocalbest
+                push!(Vactive, ixnew)
+                roadmap[ixnew] = isel
+
+                if dist(xnew, xgoal) < dist(states[imin], xgoal) ||
+                   ((dist(xnew, xgoal) < ϵ) && (cost(ixnew) < cost(imin)))
+                    imin = length(states)
+                    if xgoal == xrand
+                        @info "Biased step"
+                    end
+                    @info xnew imin dist(xnew, xgoal) cost(imin)
+                end
+
+                # Prune dominated nodes
+                if !isnothing(ixpeer)
+                    filter!(x -> x ≠ ixpeer, Vactive)
+                    push!(Vinactive, ixpeer)
+                end
+                S[isnew] = ixnew
+                while !isnothing(ixpeer) &&
+                          ixpeer ∉ values(roadmap) &&
+                          ixpeer ∈ Vinactive
+                    ixparent = roadmap[ixpeer]
+                    delete!(roadmap, ixpeer)
+                    filter!(x -> x ≠ ixpeer, Vinactive)
+                    ixpeer = ixparent
+                end
+            end
+        end
+    end
+
+    # if dist(xnew, xgoal) < ϵ
+    # @warn "Did not converge within ϵ"
+    path = pathto(roadmap, imin)
+
+    @info "Path length:" sum([control.t for control in controls[path]])
+
+    return path, roadmap, states, controls
+end

@@ -22,6 +22,7 @@ prob = AttitudeProblem(B_I, m_max, J, ωmax, Quaternion(0.,0.,0.,1.), [Keepout([
 # Common Params
 n = 20000
 ϵ = 0.03
+controlfn = planarcontrolfactory(prob)
 samplestate() = ComponentArray(q = toscalarlast(randquat()), ω = randinunit(3) * ωmax)
 samplecontrol() = randinunit(2) # influence based on previous state?
 sampletime() = rand()*25
@@ -35,17 +36,18 @@ pbend = 0.03
 kbend = 50
 bendfactor = 20
 tmod = 0.1
-umod = nothing
+kmod = nothing
 globalbranchimprovement = true
 
-standardrrt = true
+standardrrt = false
 if standardrrt
     pbend = 0.
     # biasfactor = Inf
 end
 suffix = "biasrrt"
 
-path, roadmap, states, controls = bonsairrt(prob, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, kbias, biasfactor, pbend, kbend, bendfactor; tmod=tmod, umod=umod, globalbranchimprovement=globalbranchimprovement)
+path, roadmap, states, controls = bonsairrt(prob, controlfn, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, kbias, biasfactor, pbend, kbend, bendfactor;
+                                            tmod=tmod, kmod=kmod, globalbranchimprovement=globalbranchimprovement)
 
 
 # δₛ = 0.05
@@ -80,7 +82,7 @@ ax1 = Axis(fig[1,1])
 ax1.ylabel = "ω [deg/s]"
 
 ax2 = Axis(fig[2,1])
-[lines!(ax2, sol.t, [ufun(t)[i] for t in sol.t]) for i in 1:2]
+[lines!(ax2, sol.t, [ufun(t, 0, x)[i] for (t,x) in zip(sol.t, sol.u)]) for i in 1:2]
 ax2.ylabel = "u [-]"
 
 ax3 = Axis(fig[3,1])

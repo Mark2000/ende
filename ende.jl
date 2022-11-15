@@ -1,4 +1,4 @@
-using ComponentArrays
+using ComponentArrays: ComponentArray
 using DifferentialEquations
 using LinearAlgebra
 using Optim
@@ -35,8 +35,10 @@ end
 
 softmax(x) = exp.(x) ./ sum(exp.(x))
 
+State = typeof(ComponentArray(q = [0.,0.,0.,1.], ω = [0.,0.,0.]))
+
 # Distance Metrics
-function dist(x1, x2, α = 5)
+function dist(x1::State, x2::State, α = 5)
     """
     Distance metric between (q, ω) states
         eigangle(q₁,q₂) + α * norm(ω₁-ω₂)
@@ -50,7 +52,7 @@ function dist(x1, x2, α = 5)
     dangle + α * dω
 end
 
-function distB(x1, x2, B, α = 5, ϵ = 1, β = 1)
+function distB(x1::State, x2::State, B, α = 5, ϵ = 1, β = 1)
     """
     Distance metric between (q, ω) states that penalizes out of B plane error
         eigangle(q₁,q₂) * (1 + ϵ * eigangleₒₒₚ(q₁,q₂))
@@ -87,8 +89,9 @@ struct Keepout
     halfangle::Real
 end
 
+# TODO: Base.@kwdef
 struct AttitudeProblem
-    B::Vector
+    B::Function
     m_max::Real
     J::Matrix
     Jinv::Matrix
@@ -101,7 +104,7 @@ struct AttitudeProblem
 end
 
 AttitudeProblem(
-    B::Vector,
+    B::Function,
     m_max::Real,
     J::Matrix,
     qstart::Quaternion,
@@ -123,8 +126,8 @@ AttitudeProblem(
     keepouts,
 )
 
-AttitudeProblem(
-    B::Real,
+function AttitudeProblem(
+    B::Union{Real, Vector},
     m_max::Real,
     J::Matrix,
     qstart::Quaternion,
@@ -133,17 +136,24 @@ AttitudeProblem(
     ωgoal::Vector,
     ωmax::Real,
     keepouts::Vector{Keepout},
-) = AttitudeProblem(
-    B * randunit(3),
-    m_max,
-    J,
-    qstart,
-    ωstart,
-    qgoal,
-    ωgoal,
-    ωmax,
-    keepouts,
 )
+    if isa(B, Real)
+        Bvec = B * randunit(3)
+    else
+        Bvec = B
+    end
+    AttitudeProblem(
+        (t)->Bvec,
+        m_max,
+        J,
+        qstart,
+        ωstart,
+        qgoal,
+        ωgoal,
+        ωmax,
+        keepouts,
+    )
+end
 
 AttitudeProblem(B, m_max::Real, J::Matrix, ωmax::Real) = AttitudeProblem(
     B,
@@ -187,39 +197,54 @@ AttitudeProblem(
     keepouts,
 )
 
-
-statestart(prob::AttitudeProblem) =
+statestart(prob::AttitudeProblem)::State =
     ComponentArray(q = toscalarlast(prob.qstart), ω = prob.ωstart)
-stategoal(prob::AttitudeProblem) =
+stategoal(prob::AttitudeProblem)::State =
     ComponentArray(q = toscalarlast(prob.qgoal), ω = prob.ωgoal)
 
-struct ControlledAttitudeProblem
-    prob::AttitudeProblem
-    u::Function
+struct ControlCommand
+    # Use controller u(t, k, x) for t seconds
+    t::Real
+    controlfn::Function
+    k
 end
 
-struct ControlCommand
-    t::Real
-    u::Vector
+ControlCommand() = ControlCommand(0.0, (t, k, x)->[0.,0.,0.], [0.])
+
+Base.show(io::IO, cc::ControlCommand) = print(io, "(t = $(cc.t), controlfn = $(String(Symbol(cc.controlfn))), k = $(cc.k))")
+
+function planarcontrolfactory(prob::AttitudeProblem)
+    function planarcontrol(t::Real, k::Vector, x::State)::Vector
+        q = normalize(fromscalarlast(x.q))
+        rotm = QuatRotation(q)
+        B_B = rotm * prob.B(t)
+
+        xI_B = rotm * [1.0, 0.0, 0.0]
+        Bx_B = normalize((B_B × xI_B) × B_B)
+        By_B = normalize(B_B × Bx_B)
+        m_B = prob.m_max * (k[1] * Bx_B + k[2] * By_B)
+    end
+    return planarcontrol
 end
 
 # System Dynamics
+struct ControlledAttitudeProblem
+    prob::AttitudeProblem
+    control::ControlCommand
+end
+
 function eulereqns(dx, x, params, t)
     """
     Derivative of Euler equations with intertially fixed dipole in constant B field
     """
     J = params.prob.J
     Jinv = params.prob.Jinv
-    B_I = params.prob.B
+    B_I = params.prob.B(t)
     q = normalize(fromscalarlast(x.q))
     rotm = QuatRotation(q)
     B_B = rotm * B_I
 
-    xI_B = rotm * [1.0, 0.0, 0.0]
-    Bx_B = normalize((B_B × xI_B) × B_B)
-    By_B = normalize(B_B × Bx_B)
-    m_B = params.prob.m_max * (params.u(t)[1] * Bx_B + params.u(t)[2] * By_B)
-
+    m_B = params.control.controlfn(t, params.control.k, x)
     L_B = m_B × B_B
 
     α = Jinv * (L_B - x.ω × (J * x.ω))
@@ -230,10 +255,9 @@ function eulereqns(dx, x, params, t)
     return nothing
 end
 
-function stepstate(state, u, t, prob::AttitudeProblem)
-    ufun(t) = u
-    params = ControlledAttitudeProblem(prob, ufun)
-    ode = ODEProblem(eulereqns, state, (0, t), params)
+function stepstate(state, control::ControlCommand, prob::AttitudeProblem, t0=0.0)
+    params = ControlledAttitudeProblem(prob, control)
+    ode = ODEProblem(eulereqns, state, t0.+(0, control.t), params)
     sol = solve(ode, reltol = 1e-7, abstol = 1e-9) # save_everystep = false
     for x in sol.u
         if norm(x.ω) > prob.ωmax
@@ -261,211 +285,15 @@ function pathto(roadmap, istate::Integer)
     return path
 end
 
-timecost(roadmap, controls, istate::Integer) =
+timecost(roadmap, controls::Vector{ControlCommand}, istate::Integer) =
     sum([control.t for control in controls[pathto(roadmap, istate)]])
 
-timecost(controls, path) = sum([control.t for control in controls[path]])
+timecost(controls::Vector{ControlCommand}, path) = sum([control.t for control in controls[path]])
 
 # Search Functions
-function dynamicrrt(
-    prob,
-    samplecontrol::Function,
-    samplestate::Function,
-    sampletime::Function,
-    dist::Function,
-    n,
-    ϵ,
-    pbias,
-    k,
-)
-    xstart = statestart(prob)
-    xgoal = stategoal(prob)
-
-    states = [xstart]
-    controls = [ControlCommand(0.0, [0.0; 0.0])]
-    path = []
-    roadmap = Dict()
-    imin = 1
-    for iter = 1:n
-        if mod(iter, 1000) == 0
-            @info "on step" iter
-        end
-
-        unew = [0.0, 0.0]
-        xnew = ComponentArray()
-        valid = false
-        inear = imin
-        dt = 0.0
-
-        if rand() < pbias
-            xrand = xgoal
-            xnear = states[imin]
-            dcurrent = Inf
-            for i = 1:k
-                utest = samplecontrol()
-                dtcurrent = sampletime()
-                xtest, valid = stepstate(xnear, utest, dtcurrent, prob)
-                dtest = dist(xtest, xgoal)
-                if valid & (dist(xtest, xgoal) < dcurrent)
-                    xnew = xtest
-                    unew = utest
-                    dcurrent = dtest
-                    dt = dtcurrent
-                end
-            end
-        else
-            xrand = samplestate()
-            inear = argmin([dist(x, xrand) for x in states])
-            xnear = states[inear]
-
-            unew = samplecontrol()
-            dt = sampletime()
-            xnew, valid = stepstate(xnear, unew, dt, prob)
-        end
-
-        if valid
-            push!(states, xnew)
-            push!(controls, ControlCommand(dt, unew))
-            roadmap[length(states)] = inear
-            if dist(xnew, xgoal) < dist(states[imin], xgoal)
-                imin = length(states)
-                if xrand == xgoal
-                    @info "Biased step found new minimum:"
-                end
-                @info xnew imin dist(xnew, xgoal)
-            end
-            if dist(xnew, xgoal) < ϵ
-                @info "Converged within ϵ"
-                path = pathto(roadmap, length(states))
-                break
-            end
-        end
-    end
-
-    if path == []
-        @warn "Did not converge within ϵ"
-        path = pathto(roadmap, imin)
-    end
-
-    @info "Path time:" sum([control.t for control in controls[path]])
-
-    return path, roadmap, states, controls
-end
-
-function sst(
-    prob,
-    samplecontrol::Function,
-    samplestate::Function,
-    sampletime::Function,
-    dist::Function,
-    n,
-    ϵ,
-    δbn,
-    δₛ,
-    pbias,
-)
-    # Currently assumes time is cost
-    xstart = statestart(prob)
-    xgoal = stategoal(prob)
-
-    states = [xstart]
-    controls = [ControlCommand(0.0, [0.0; 0.0])]
-    path = []
-    roadmap = Dict()
-
-    Vactive = [1]
-    Vinactive = Integer[]
-    S = Dict{Int,Union{Int,Nothing}}(1 => 1)
-
-    function cost(istate)
-        path = pathto(roadmap, istate)
-        sum([control.t for control in controls[path]])
-    end
-
-    imin = 1
-    for iter = 1:n
-        if mod(iter, 1000) == 0
-            @info "on step" iter
-        end
-
-        # Best First SST
-        if rand() < pbias
-            xrand = xgoal
-        else
-            xrand = samplestate()
-        end
-        Inear = [i for i in Vactive if dist(xrand, states[i]) < δbn]
-        isel =
-            isempty(Inear) ?
-            Vactive[argmin([dist(x, xrand) for x in states[Vactive]])] :
-            Inear[argmin([cost(i) for i in Inear])]
-        xsel = states[isel]
-
-        u = samplecontrol()
-        dt = sampletime()
-        xnew, valid = stepstate(xsel, u, dt, prob)
-
-        if valid
-            push!(states, xnew)
-            push!(controls, ControlCommand(dt, u))
-            ixnew = length(states)
-
-            # Is node locally the best
-            isnodelocalbest = false
-            isnew = collect(keys(S))[argmin([
-                dist(x, xnew) for x in states[collect(keys(S))]
-            ])]
-            if dist(states[isnew], xnew) > δₛ
-                isnew = ixnew
-                S[isnew] = nothing
-            end
-            ixpeer = S[isnew]
-            if isnothing(ixpeer) || cost(isel) + dt < cost(ixpeer)
-                isnodelocalbest = true
-            end
-
-            if isnodelocalbest
-                push!(Vactive, ixnew)
-                roadmap[ixnew] = isel
-
-                if dist(xnew, xgoal) < dist(states[imin], xgoal) ||
-                   ((dist(xnew, xgoal) < ϵ) && (cost(ixnew) < cost(imin)))
-                    imin = length(states)
-                    if xgoal == xrand
-                        @info "Biased step"
-                    end
-                    @info xnew imin dist(xnew, xgoal) cost(imin)
-                end
-
-                # Prune dominated nodes
-                if !isnothing(ixpeer)
-                    filter!(x -> x ≠ ixpeer, Vactive)
-                    push!(Vinactive, ixpeer)
-                end
-                S[isnew] = ixnew
-                while !isnothing(ixpeer) &&
-                          ixpeer ∉ values(roadmap) &&
-                          ixpeer ∈ Vinactive
-                    ixparent = roadmap[ixpeer]
-                    delete!(roadmap, ixpeer)
-                    filter!(x -> x ≠ ixpeer, Vinactive)
-                    ixpeer = ixparent
-                end
-            end
-        end
-    end
-
-    # if dist(xnew, xgoal) < ϵ
-    # @warn "Did not converge within ϵ"
-    path = pathto(roadmap, imin)
-
-    @info "Path length:" sum([control.t for control in controls[path]])
-
-    return path, roadmap, states, controls
-end
-
 function bonsairrt(
     prob,
+    controlfn::Function,
     samplecontrol::Function,
     samplestate::Function,
     sampletime::Function,
@@ -479,14 +307,14 @@ function bonsairrt(
     kbend,
     bendfactor;
     tmod = nothing,
-    umod = nothing,
+    kmod = nothing,
     globalbranchimprovement = false,
 )
     xstart = statestart(prob)
     xgoal = stategoal(prob)
 
     states = [xstart]
-    controls = [ControlCommand(0.0, [0.0; 0.0])]
+    controls = [ControlCommand()]
     path = []
     roadmap = Dict()
     imin = 1 # Index of best state
@@ -532,22 +360,19 @@ function bonsairrt(
                 branchcontrols = controls[branch[jelbow+1:end]]
 
                 tnew = sampletime()
-                unew = samplecontrol()
-                if !isnothing(umod)
-                    unew = controls[branch[jelbow]].u .+ umod .* randinunit(2)
-                    unew = norm(unew) > 1 ? unew / norm(unew) : unew
+                knew = samplecontrol()
+                if !isnothing(kmod)
+                    knew = controls[branch[jelbow]].k.+ kmod .* randinunit(length(controls[branch[jelbow]].k))
+                    knew = norm(knew) > 1 ? knew / norm(knew) : knew # TODO generalize this
                 end
                 if !isnothing(tmod)
-                    tnew =
-                        controls[branch[jelbow]].t *
-                        (1 - tmod + 2 * rand() * tmod)
+                    tnew = controls[branch[jelbow]].t * (1 - tmod + 2 * rand() * tmod)
                 end
-                controltest = ControlCommand(tnew, unew)
+                controltest = ControlCommand(tnew, controlfn, knew)
 
                 xfirst, valid = stepstate(
                     states[branch[jelbow-1]],
-                    controltest.u,
-                    controltest.t,
+                    controltest,
                     prob,
                 )
                 if valid
@@ -555,8 +380,7 @@ function bonsairrt(
                     for control in branchcontrols
                         xnext, valid = stepstate(
                             branchstates[end],
-                            control.u,
-                            control.t,
+                            control,
                             prob,
                         )
                         if valid
@@ -597,8 +421,7 @@ function bonsairrt(
             end
 
         else
-            unew = [0.0, 0.0]
-            xnew = ComponentArray()
+            controlnew = nothing
             valid = false
             inear = imin
             dt = 0.0
@@ -616,15 +439,13 @@ function bonsairrt(
                 xnear = states[inear]
                 dcurrent = Inf
                 for i = 1:kbias
-                    utest = samplecontrol()
-                    dtcurrent = sampletime()
-                    xtest, valid = stepstate(xnear, utest, dtcurrent, prob)
+                    controltest = ControlCommand(sampletime(), controlfn, samplecontrol())
+                    xtest, valid = stepstate(xnear, controltest, prob)
                     dtest = dist(xtest, xgoal)
-                    if valid & (dist(xtest, xgoal) < dcurrent) # TODO: how often to find new solution
+                    if valid & (dist(xtest, xgoal) < dcurrent)
                         xnew = xtest
-                        unew = utest
+                        controlnew = controltest
                         dcurrent = dtest
-                        dt = dtcurrent
                     end
                 end
             else
@@ -632,14 +453,13 @@ function bonsairrt(
                 inear = argmin([dist(x, xrand) for x in states])
                 xnear = states[inear]
 
-                unew = samplecontrol()
-                dt = sampletime()
-                xnew, valid = stepstate(xnear, unew, dt, prob)
+                controlnew = ControlCommand(sampletime(), controlfn, samplecontrol())
+                xnew, valid = stepstate(xnear, controlnew, prob)
             end
 
             if valid
                 push!(states, xnew)
-                push!(controls, ControlCommand(dt, unew))
+                push!(controls, controlnew)
                 roadmap[length(states)] = inear
                 if dist(xnew, xgoal) < dist(states[imin], xgoal) # todo move checks outside if
                     imin = length(states)
@@ -673,15 +493,15 @@ end
 function controlfnfactory(path, controls)
     tcontrols = cumsum([control.t for control in controls[path]])
     tmax = tcontrols[end]
-    function ufun(t)
+    function ufun(t, k, x)
         if t == 0.0
-            return controls[path[2]].u
+            return controls[path[2]].controlfn(t, controls[path[2]].k, x)
         end
         icontrol = findfirst(t .< tcontrols)
         if isnothing(icontrol)
-            return [0.0, 0.0]
+            return [0.0, 0.0, 0.0]
         end
-        return controls[path[icontrol]].u
+        return controls[path[icontrol]].controlfn(t, controls[path[2]].k, x)
     end
     return ufun, tmax, tcontrols
 end

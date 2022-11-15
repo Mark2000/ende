@@ -1,37 +1,41 @@
 include("ende.jl")
 include("endeplots.jl")
 
+using FileIO
+using Polynomials
+
 N = 1
 
 cases = Dict{String,Dict{Symbol,Any}}()
 # cases["basicrrt"] = Dict(:pbend => 0., :biasfactor => Inf)
 # cases["biasrrt"] = Dict(:pbend => 0.)
 # cases["bonsairrt"] = Dict(:n => 20000)
+# cases["bonsairrt"] = Dict(:n => 20000)
 # cases["thickbonsairrt"] = Dict(:globalbranchimprovement => false, :n => 15000)
 
 function mccase()
     case = Dict{Symbol,Any}()
-    α = rand()*100
-    case[:α] = α
-    case[:distfn] = (x1, x2)->dist(x1, x2, α)
-    tmax = rand()*50
-    case[:tmax] = tmax
-    case[:sampletime] = ()->rand()*tmax
-    case[:pbias] = rand()
-    case[:kbias] = 25
-    case[:biasfactor] = sample([rand()*100, Inf], Weights([3/4,1/4]))
+    # α = rand()*100
+    # case[:α] = α
+    # case[:distfn] = (x1, x2)->dist(x1, x2, α)
+    # tmax = rand()*50
+    # case[:tmax] = tmax
+    # case[:sampletime] = ()->rand()*tmax
+    # case[:pbias] = rand()
+    # case[:kbias] = 25
+    # case[:biasfactor] = sample([rand()*100, Inf], Weights([3/4,1/4]))
 
-    case[:pbend] = rand()*0.1
-    case[:kbend] = 50
-    case[:bendfactor] = sample([rand()*100, Inf], Weights([3/4,1/4]))
-    case[:tmod] = sample([rand()*0.3, nothing], Weights([2/3,1/3]))
-    case[:umod] = sample([rand()*0.5, nothing], Weights([1/3,2/3]))
-    case[:globalbranchimprovement] = sample([true, false], Weights([2/3,1/3]))
+    # case[:pbend] = rand()*0.1
+    # case[:kbend] = 50
+    # case[:bendfactor] = sample([rand()*100, Inf], Weights([3/4,1/4]))
+    case[:tmod] = sample([rand()*0.5, nothing], Weights([2/3,1/3]))
+    case[:kmod] = sample([rand()*0.5, nothing], Weights([1/3,2/3]))
+    # case[:globalbranchimprovement] = sample([true, false], Weights([2/3,1/3]))
     return case
 end
 
-Nmc = 100
-for i in 1:100
+Nmc = 200
+for i in 1:Nmc
     cases[string(i)] = mccase()
 end
 
@@ -56,7 +60,7 @@ Threads.@threads for case in collect(keys(cases))
     ωmax = 5*π/180 # rad/s
 
     # Alg. Params
-    n = 10000
+    n = 20000
     ϵ = 0.0
     samplestate() = ComponentArray(q = toscalarlast(randquat()), ω = randinunit(3) * ωmax)
     samplecontrol() = randinunit(2)
@@ -71,7 +75,7 @@ Threads.@threads for case in collect(keys(cases))
     kbend = 50
     bendfactor = 20
     tmod = 0.1
-    umod = nothing
+    kmod = nothing
     globalbranchimprovement = true
 
     for (sym, val) in values
@@ -86,7 +90,7 @@ Threads.@threads for case in collect(keys(cases))
         # prob = AttitudeProblem(Bmag, m_max, J, ωmax, randquat(), Keepout[])
         prob = AttitudeProblem(Bmag.*[0.,0.,1.], m_max, J, ωmax, Quaternion(0.,0.,0.,1.), [Keepout([0.,0.,-1.],[-1.,0.,0.],50*π/180),Keepout(normalize([1.,1.,0.]),[0.,-1.,0.],20*π/180)])
         t0 = time()
-        path, roadmap, states, controls = bonsairrt(prob, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, kbias, biasfactor, pbend, kbend, bendfactor; tmod=tmod, umod=umod, globalbranchimprovement=globalbranchimprovement)
+        path, roadmap, states, controls = bonsairrt(prob, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, kbias, biasfactor, pbend, kbend, bendfactor; tmod=tmod, kmod=kmod, globalbranchimprovement=globalbranchimprovement)
         telapsed = time()-t0
 
         for (output, expr) in outputs
@@ -98,7 +102,7 @@ Threads.@threads for case in collect(keys(cases))
         end
     end
 end
-FileIO.save("mcsweep.jld2","out",out)
+FileIO.save("mcsweep_branchmod.jld2","run",[out,cases])
 
 # MC Compare: Lumped
 fig = Figure()
@@ -126,29 +130,38 @@ ax5.xlabel = "Execution Time [s]"
 
 hist!(ax6, vcat([case["cost"] for case in values(out)]...), normalization=:probability)
 ax6.xlabel = "Solution Cost [s]"
-  end
 
 ax1.ylabel = ax2.ylabel = ax3.ylabel = ax4.ylabel = ax5.ylabel = ax6.ylabel = "% Runs"
 
 # MC Compare: Correlation
 fig = Figure()
 cols = 4
-errorout = vcat([case["error"] for case in values(out)]...)
-for (i, sym) in enumerate([sym for (sym,val) in cases["1"] if !isa(val,Function)])
+errorout = vcat([mean(case["error"]) for case in values(out)]...)
+derrorout = vcat([std(case["error"]) for case in values(out)]...)*1.0
+for (i, sym) in enumerate([sym for (sym,val) in cases["1"] if isa(val,Union{Real,Bool,Nothing})])
     ax = Axis(fig[Int(ceil(i/cols)), mod1(i,cols)])
     ax.xlabel = string(sym)
 
-    vals = [params[sym] for (case, params) in cases]
-    vals[isnothing.(vals)] .= 0
-    vals[isinf.(vals)] .= 0
-    vals = convert(Array{Float64,1}, vals)
-    scatter!(ax, vals, errorout)
-    @info vals
+    vals = Any[params[sym] for (case, params) in cases]
+    numeric = (.!isnothing.(vals)) .& .!(vals .== Inf)
+    # vals[isnothing.(vals)] .= NaN
+    # vals[isinf.(vals)] .= NaN
+    valnum = convert(Array{Float64,1}, vals[numeric])
+    scatter!(ax, valnum, errorout[numeric])
+    errorbars!(ax, valnum, errorout[numeric], derrorout[numeric], color=:grey)
+
+    order = 2
+    p = Polynomials.fit(valnum, errorout[numeric], order)
+    lines!(ax, sort(valnum), p.(sort(valnum)))
+
+    p = Polynomials.fit(valnum, errorout[numeric]+derrorout[numeric], order)
+    lines!(ax, sort(valnum), p.(sort(valnum)))
+
+    p = Polynomials.fit(valnum, errorout[numeric]-derrorout[numeric], order)
+    lines!(ax, sort(valnum), p.(sort(valnum)))
+
+    hlines!(ax, [mean(errorout[.!numeric])], color = :red)
 end
-
-
-# MC Compare: Lumped
-fig = Figure()
 
 
 # Case Compare
