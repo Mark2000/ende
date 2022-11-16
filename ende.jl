@@ -6,6 +6,7 @@ using Quaternions
 using Random
 using Rotations
 using StatsBase
+using ControlSystemsBase
 
 Quaternion = Quaternions.Quaternion
 
@@ -213,18 +214,45 @@ ControlCommand() = ControlCommand(0.0, (t, k, x)->[0.,0.,0.], [0.])
 
 Base.show(io::IO, cc::ControlCommand) = print(io, "(t = $(cc.t), controlfn = $(String(Symbol(cc.controlfn))), k = $(cc.k))")
 
-function planarcontrolfactory(prob::AttitudeProblem)
+# TODO: tinit not used and always passed 0
+function planarcontrolfactory(prob::AttitudeProblem, tinit::Real, xinit::State, xtarget::State)
     function planarcontrol(t::Real, k::Vector, x::State)::Vector
         q = normalize(fromscalarlast(x.q))
         rotm = QuatRotation(q)
         B_B = rotm * prob.B(t)
 
         xI_B = rotm * [1.0, 0.0, 0.0]
-        Bx_B = normalize((B_B × xI_B) × B_B)
-        By_B = normalize(B_B × Bx_B)
-        m_B = prob.m_max * (k[1] * Bx_B + k[2] * By_B)
+        Cx_B = normalize((B_B × xI_B) × B_B)
+        Cy_B = normalize(B_B × Cx_B)
+        m_B = prob.m_max * (k[1] * Cx_B + k[2] * Cy_B)
+        L_B = m_B × B_B
+        return L_B
     end
     return planarcontrol
+end
+
+function fullcontrolfactory(prob::AttitudeProblem, tinit::Real, xinit::State, xtarget::State)
+    function fullcontrol(t::Real, k::Vector, x::State)::Vector
+        return k
+    end
+    return fullcontrol
+end
+
+function planarpdcontrolfactory(prob::AttitudeProblem, tinit::Real, xinit::State, xtarget::State)
+    q_FI = normalize(fromscalarlast(xtarget.q))
+    function planarpdcontrol(t::Real, k::Vector, x::State)
+        q_BI = normalize(fromscalarlast(x.q))
+        q_BF = q_BI*inv(q_FI)
+        y = [q_BF.v1; q_BF.v2; q_BF.v3; x.ω-xtarget.ω]
+        T = -[k[1]*I(3) k[2]*I(3)]*y
+        rotm = QuatRotation(q_BI)
+        B_B = rotm * prob.B(t)
+
+        T = T - T⋅normalize(B_B) * normalize(B_B)
+        Tmax = norm(B_B)*prob.m_max
+        return norm(T) < Tmax ? T : normalize(T)*Tmax
+    end
+    return planarpdcontrol
 end
 
 # System Dynamics
@@ -241,11 +269,8 @@ function eulereqns(dx, x, params, t)
     Jinv = params.prob.Jinv
     B_I = params.prob.B(t)
     q = normalize(fromscalarlast(x.q))
-    rotm = QuatRotation(q)
-    B_B = rotm * B_I
 
-    m_B = params.control.controlfn(t, params.control.k, x)
-    L_B = m_B × B_B
+    L_B = params.control.controlfn(t, params.control.k, x)
 
     α = Jinv * (L_B - x.ω × (J * x.ω))
     qdot = 1 / 2 * Ξ(q) * x.ω
@@ -273,6 +298,7 @@ function stepstate(state, control::ControlCommand, prob::AttitudeProblem, t0=0.0
             end
         end
     end
+    # @show sol.u[end]
     sol.u[end], true
 end
 
@@ -293,7 +319,7 @@ timecost(controls::Vector{ControlCommand}, path) = sum([control.t for control in
 # Search Functions
 function bonsairrt(
     prob,
-    controlfn::Function,
+    controlfnfactory::Function,
     samplecontrol::Function,
     samplestate::Function,
     sampletime::Function,
@@ -368,20 +394,25 @@ function bonsairrt(
                 if !isnothing(tmod)
                     tnew = controls[branch[jelbow]].t * (1 - tmod + 2 * rand() * tmod)
                 end
+                controlfn = controlfnfactory(prob, 0, states[branch[jelbow-1]], samplestate()) # TODO: better than sample state?
                 controltest = ControlCommand(tnew, controlfn, knew)
 
+                t0 = timecost(controls, branch[1:jelbow-1])
                 xfirst, valid = stepstate(
                     states[branch[jelbow-1]],
                     controltest,
                     prob,
+                    t0
                 )
                 if valid
                     branchstates = [xfirst]
                     for control in branchcontrols
+                        t0 += control.t
                         xnext, valid = stepstate(
                             branchstates[end],
                             control,
                             prob,
+                            t0
                         )
                         if valid
                             push!(branchstates, xnext)
@@ -438,9 +469,11 @@ function bonsairrt(
                 end
                 xnear = states[inear]
                 dcurrent = Inf
+                controlfn = controlfnfactory(prob, 0, xnear, xrand)
+                t0 = timecost(roadmap, controls, inear)
                 for i = 1:kbias
                     controltest = ControlCommand(sampletime(), controlfn, samplecontrol())
-                    xtest, valid = stepstate(xnear, controltest, prob)
+                    xtest, valid = stepstate(xnear, controltest, prob, t0)
                     dtest = dist(xtest, xgoal)
                     if valid & (dist(xtest, xgoal) < dcurrent)
                         xnew = xtest
@@ -453,8 +486,10 @@ function bonsairrt(
                 inear = argmin([dist(x, xrand) for x in states])
                 xnear = states[inear]
 
+                controlfn = controlfnfactory(prob, 0, xnear, xrand)
                 controlnew = ControlCommand(sampletime(), controlfn, samplecontrol())
-                xnew, valid = stepstate(xnear, controlnew, prob)
+                t0 = timecost(roadmap, controls, inear)
+                xnew, valid = stepstate(xnear, controlnew, prob, t0)
             end
 
             if valid
@@ -490,10 +525,10 @@ function bonsairrt(
 end
 
 # Postprocessing Functions
-function controlfnfactory(path, controls)
+function lumpedcontrolfnfactory(path, controls)
     tcontrols = cumsum([control.t for control in controls[path]])
     tmax = tcontrols[end]
-    function ufun(t, k, x)
+    function ufun(t::Real, k::Vector, x::State)
         if t == 0.0
             return controls[path[2]].controlfn(t, controls[path[2]].k, x)
         end
@@ -501,7 +536,7 @@ function controlfnfactory(path, controls)
         if isnothing(icontrol)
             return [0.0, 0.0, 0.0]
         end
-        return controls[path[icontrol]].controlfn(t, controls[path[2]].k, x)
+        return controls[path[icontrol]].controlfn(t, controls[path[icontrol]].k, x)
     end
     return ufun, tmax, tcontrols
 end
@@ -514,7 +549,7 @@ function resamplesolution(
     comparison = nothing,
     tstops = nothing,
 )
-    params = ControlledAttitudeProblem(prob, ufun)
+    params = ControlledAttitudeProblem(prob, ControlCommand(tmax, ufun, []))
     ode = ODEProblem(eulereqns, statestart(prob), (0, tmax), params)
     sol = solve(
         ode,

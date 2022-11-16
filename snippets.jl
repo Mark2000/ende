@@ -172,3 +172,85 @@ function sst(
 
     return path, roadmap, states, controls
 end
+
+
+    # qdot_0 = (1/2* Ξ(q_lin) * ω_0)[1:3]
+    # ωdot_0 = - prob.Jinv * ω_0 × (prob.J * ω_0)
+    #
+    # J1 = prob.J[1,1]
+    # J2 = prob.J[2,2]
+    # J3 = prob.J[3,3]
+    # dwdw = [0 (J2-J3)/J1*ω_0[3] (J2-J3)/J1*ω_0[2];
+    #         (J3-J1)/J2*ω_0[3] 0 (J3-J1)/J2*ω_0[1]
+    #         (J1-J2)/J3*ω_0[2] (J1-J2)/J3*ω_0[1] 0];
+    #
+    # show(stdout, "text/plain", dwdw)
+    #
+    # dqdy = [0 ω_0[3] -ω_0[2] q_lin.s -q_lin.v3 q_lin.v2;
+    #         -ω_0[3] 0 ω_0[1] q_lin.v3 q_lin.s -q_lin.v1;
+    #         ω_0[2] -ω_0[1] 0 -q_lin.v2 q_lin.v1 q_lin.s]/2
+    #
+    # show(stdout, "text/plain", dqdy)
+    #
+    # A = [dqdy qdot_0;
+    #      zeros(3,3) dwdw ωdot_0;
+    #      zeros(1,7)]
+    #
+    # rotm = QuatRotation(q_BI0)
+    # B_B = rotm * prob.B(tinit)
+    # xI_B = rotm * [1.0, 0.0, 0.0]
+    # Cx_B = normalize((B_B × xI_B) × B_B)
+    # Cy_B = normalize(B_B × Cx_B)
+
+    # B = [zeros(3,2);
+    #      B_B×Cx_B./diag(J) B_B×Cy_B./diag(J);
+    #      zeros(1,2)]
+
+    # show(stdout, "text/plain", A)
+    # show(stdout, "text/plain", B)
+    #
+
+
+    function lqrcontrolfactory(prob::AttitudeProblem, tinit::Real, xinit::State, xtarget::State)
+        # state vector y = [qx, qy, qz, wx, wy, wz, 1]
+        q_FI = normalize(fromscalarlast(xtarget.q))
+        q_BI0 = normalize(fromscalarlast(xinit.q))
+        q_BF0 = q_BI0*inv(q_FI) # initial q error
+        q_lin = q_BF0
+
+        ω_0 = xinit.ω
+
+
+        A = zeros(6,6)
+        A[1:3,4:6] = 0.5I(3)
+
+        B = [I(3); prob.Jinv]
+
+        Q = 1.0I(6)
+        Q[4,4] = Q[5,5] = Q[6,6] = 1
+        R = 0.001I(3)
+
+        L = lqr(Continuous,A,B,Q,R)#*1e-6
+
+        # @info "LQR out"
+        @show L
+
+        function lqrcontrol(t::Real, k::Vector, x::State)::Vector
+            q_BI = normalize(fromscalarlast(x.q))
+            rotm = QuatRotation(q_BI)
+            B_B = rotm * B_I
+
+            q_BF = q_BI*inv(q_FI)
+            y = [q_BF.v1; q_BF.v2; q_BF.v3; x.ω] # TODO omega wrong
+
+            T = -L*y
+            Tonplane = T - T⋅B_B./norm(B_B)*B_B./norm(B_B)
+
+            m_mag = min(norm(T)/norm(B_B),m_max)
+            # @show m_mag m_max
+
+            m_B = m_mag * (B_B./norm(B_B)) × (Tonplane./norm(Tonplane))
+            return m_B × B_B
+        end
+        return lqrcontrol
+    end

@@ -20,9 +20,9 @@ prob = AttitudeProblem(B_I, m_max, J, ωmax, Quaternion(0.,0.,0.,1.), [Keepout([
 # SOLVE
 
 # Common Params
-n = 20000
-ϵ = 0.03
-controlfn = planarcontrolfactory(prob)
+n = 10000
+ϵ = 0.005
+controlfnfactory = planarcontrolfactory
 samplestate() = ComponentArray(q = toscalarlast(randquat()), ω = randinunit(3) * ωmax)
 samplecontrol() = randinunit(2) # influence based on previous state?
 sampletime() = rand()*25
@@ -44,11 +44,32 @@ if standardrrt
     pbend = 0.
     # biasfactor = Inf
 end
-suffix = "biasrrt"
 
-path, roadmap, states, controls = bonsairrt(prob, controlfn, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, kbias, biasfactor, pbend, kbend, bendfactor;
-                                            tmod=tmod, kmod=kmod, globalbranchimprovement=globalbranchimprovement)
+lqrcontrol = false
+if lqrcontrol
+    controlfnfactory = lqrcontrolfactory
+    samplecontrol() = [0]
+    kbias = 25 # still get random times
+end
 
+pdcontrol = true
+if pdcontrol
+    controlfnfactory = planarpdcontrolfactory
+    # samplecontrol() = [0.002; 0.01]
+    samplecontrol() = [rand()*0.005; rand()*0.03]
+    pbias = 0.5
+end
+
+fullcontrol = false
+if fullcontrol
+    controlfnfactory = fullcontrolfactory
+    samplecontrol() = randinunit(3) * m_max * Bmag
+end
+
+path, roadmap, states, controls = bonsairrt(prob, controlfnfactory, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, kbias, biasfactor, pbend, kbend, bendfactor;
+                                            tmod=tmod, kmod=kmod, globalbranchimprovement=globalbranchimprovement)# suffix = "lqrtest"
+
+suffix = "pd"
 
 # δₛ = 0.05
 # δbn = 2δₛ
@@ -60,7 +81,7 @@ timefactor = 10
 saveat = timefactor/framerate
 comparison = states[path[end]]
 
-(ufun, tmax, tstops) = controlfnfactory(path, controls)
+(ufun, tmax, tstops) = lumpedcontrolfnfactory(path, controls)
 sol = resamplesolution(prob, ufun, tmax, saveat=saveat, comparison=comparison, tstops=tstops)
 
 # PLOTTING
@@ -82,8 +103,8 @@ ax1 = Axis(fig[1,1])
 ax1.ylabel = "ω [deg/s]"
 
 ax2 = Axis(fig[2,1])
-[lines!(ax2, sol.t, [ufun(t, 0, x)[i] for (t,x) in zip(sol.t, sol.u)]) for i in 1:2]
-ax2.ylabel = "u [-]"
+[lines!(ax2, sol.t, [(QuatRotation(normalize(inv(fromscalarlast(x.q))))*ufun(t, [], x))[i] for (t,x) in zip(sol.t, sol.u)]) for i in 1:3]
+ax2.ylabel = "L [N⋅m]"
 
 ax3 = Axis(fig[3,1])
 [lines!(ax3, sol.t, [x.q[i] for x in sol.u]) for i in 1:4]
@@ -92,3 +113,8 @@ ax3.ylabel = "q [-]"
 ax3.xlabel = "Time [s]"
 linkxaxes!(ax1,ax2,ax3)
 save("output/solutiondynamics_$(suffix).png", fig)
+
+fig = Figure(resolution=(800,600).*2, fontsize=24)
+ax4 = Axis(fig[1,1])
+latlongkeepout(ax4, sol, prob)
+save("output/latlong_$(suffix).png", fig)

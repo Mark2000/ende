@@ -51,22 +51,19 @@ function saveanimation(sol, ufun::Function, prob::AttitudeProblem, saveas, frame
     ylims!(ax,(-3.,3))
     zlims!(ax,(-3.,3))
 
-    B_hat = normalize(prob.B)
-
-    arrows!(ax,[Point3([0.; 0.; 0.])], [Point3(B_hat)], color=:green, lengthscale=2, label="B")
+    Bvec = @lift( [Point3(normalize(prob.B(sol.t[$tstamp])))] )
+    arrows!(ax,[Point3([0.; 0.; 0.])], Bvec, color=:green, lengthscale=2, label="B")
 
     ωvec = @lift( [Point3( (QuatRotation(normalize(inv(fromscalarlast(sol.u[$tstamp].q)))) * sol.u[$tstamp].ω)... )] )
     arrows!(ax, [Point3([0.; 0.; 0.])], ωvec, color=:purple, lengthscale=20, label="ω")
 
-    Bx = normalize((B_hat × [1.0, 0.0, 0.0]) × B_hat)
-    By = B_hat × Bx
-    uvec = @lift( [Point3( ufun(sol.t[$tstamp])[1].*Bx + ufun(sol.t[$tstamp])[2].*By )] )
-    arrows!(ax, [Point3([0.; 0.; 0.])], uvec, color=:red, lengthscale=2, label="m")
-    Lvec = @lift( [Point3( (ufun(sol.t[$tstamp])[1].*Bx + ufun(sol.t[$tstamp])[2].*By) × B_hat)] )
-    ωvecscale = @lift( $ωvec.*20 )
-    arrows!(ax, ωvecscale, Lvec, color=:blue, lengthscale=2, label="L")
 
     rotm = @lift( QuatRotation(normalize(inv(fromscalarlast(sol.u[$tstamp].q)))) )
+
+    Lvec = @lift( [$rotm*ufun(sol.t[$tstamp], [], sol.u[$tstamp])] )
+    ωvecscaled = @lift( $ωvec.*20 )
+    arrows!(ax, ωvecscaled, Lvec, color=:blue, lengthscale=0.5e5, label="L")
+
 
     keepoutcolors = [:yellow, :orange, :pink] # TODO associate with keepout
     for (keepout, color) in zip(prob.keepouts, keepoutcolors)

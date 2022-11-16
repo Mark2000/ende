@@ -4,15 +4,15 @@ include("endeplots.jl")
 using FileIO
 using Polynomials
 
-N = 1
+N = 100
 
 cases = Dict{String,Dict{Symbol,Any}}()
 # cases["basicrrt"] = Dict(:pbend => 0., :biasfactor => Inf)
 # cases["biasrrt"] = Dict(:pbend => 0.)
 # cases["bonsairrt"] = Dict(:n => 20000)
-# cases["bonsairrt"] = Dict(:n => 20000)
 # cases["thickbonsairrt"] = Dict(:globalbranchimprovement => false, :n => 15000)
-
+cases["bonsaipdrrt"] = Dict(:samplecontrol => ()->[rand()*0.005; rand()*0.03], :ϵ => 0.01)
+#:controlfnfactory => planarpdcontrolfactory,
 function mccase()
     case = Dict{Symbol,Any}()
     # α = rand()*100
@@ -40,7 +40,7 @@ for i in 1:Nmc
 end
 
 outputs = Dict{String,Union{Symbol,Function}}()
-outputs["time"] = :(telapsed)
+outputs["time"] = ()->nothing
 outputs["cost"] = (path, roadmap, states, controls, prob, distfn)->timecost(controls, path)
 outputs["qerror"] = (path, roadmap, states, controls, prob, distfn)->dist(states[path[end]], stategoal(prob), 0)
 outputs["werror"] = (path, roadmap, states, controls, prob, distfn)->dist(states[path[end]], stategoal(prob), 1e10)/1e10
@@ -49,19 +49,20 @@ outputs["treesize"] = (path, roadmap, states, controls, prob, distfn)->length(st
 
 out = Dict{String,Dict{String,Vector}}(case => Dict(output => zeros(N) for output in keys(outputs)) for case in keys(cases))
 
-Threads.@threads for case in collect(keys(cases))
+for case in collect(keys(cases))
     values = cases[case]
     @info "Benchmarking" case values
     # Sys. Params
-    Bmag = 0.5e-4 # Teslas (kg/As^2)
+    Bmag = 5e-5 # Teslas (kg/As^2)
     m_max = 0.66 # A*m^2
     J = [41.87 0.0 0.0; 0.0 41.87 0.0; 0.0 0.0 6.67] * 1e-3 # kg*m^2
 
     ωmax = 5*π/180 # rad/s
 
     # Alg. Params
-    n = 20000
+    n = 10000
     ϵ = 0.0
+    controlfnfactory = planarpdcontrolfactory
     samplestate() = ComponentArray(q = toscalarlast(randquat()), ω = randinunit(3) * ωmax)
     samplecontrol() = randinunit(2)
     sampletime() = rand()*25
@@ -86,15 +87,15 @@ Threads.@threads for case in collect(keys(cases))
         end
     end
 
-    for i in 1:N
+    Threads.@threads for i in 1:N
         # prob = AttitudeProblem(Bmag, m_max, J, ωmax, randquat(), Keepout[])
         prob = AttitudeProblem(Bmag.*[0.,0.,1.], m_max, J, ωmax, Quaternion(0.,0.,0.,1.), [Keepout([0.,0.,-1.],[-1.,0.,0.],50*π/180),Keepout(normalize([1.,1.,0.]),[0.,-1.,0.],20*π/180)])
         t0 = time()
-        path, roadmap, states, controls = bonsairrt(prob, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, kbias, biasfactor, pbend, kbend, bendfactor; tmod=tmod, kmod=kmod, globalbranchimprovement=globalbranchimprovement)
+        path, roadmap, states, controls = bonsairrt(prob, controlfnfactory, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, kbias, biasfactor, pbend, kbend, bendfactor; tmod=tmod, kmod=kmod, globalbranchimprovement=globalbranchimprovement)
         telapsed = time()-t0
 
         for (output, expr) in outputs
-            if isa(expr, Symbol)
+            if output == "time"
                 out[case][output][i] = telapsed # TODO TODO TODO FIX THIS
             else
                 out[case][output][i] = expr(path, roadmap, states, controls, prob, distfn)
@@ -102,7 +103,7 @@ Threads.@threads for case in collect(keys(cases))
         end
     end
 end
-FileIO.save("mcsweep_branchmod.jld2","run",[out,cases])
+# FileIO.save("mcsweep_branchmod.jld2","run",[out,cases])
 
 # MC Compare: Lumped
 fig = Figure()
@@ -176,7 +177,7 @@ exclude = ["biasrrt","basicrrt", "thickbonsairrt"]
 colors = ax1.palette.patchcolor[]
 for (i, (case, caseout)) in enumerate(out)
     if case ∉ exclude
-        h = hist!(ax1, caseout["error"],bins=(0:0.1:1.5), normalization=:probability, label=case, color=colors[i])
+        h = hist!(ax1, caseout["error"],bins=(0:0.01:1.5), normalization=:probability, label=case, color=colors[i])
         hist!(ax2, caseout["treesize"],bins=(13500:125:20000), normalization=:probability, color=colors[i])
         hist!(ax3, caseout["time"],bins=(0:15:500), normalization=:probability, color=colors[i])
         hist!(ax4, caseout["cost"],bins=(0:30:700), normalization=:probability, color=colors[i])
@@ -190,4 +191,4 @@ ax3.xlabel = "Execution Time [s]"
 ax4.xlabel = "Solution Cost [s]"
 
 fig[1,3] = Legend(fig, ax1)
-save("output/comp_bonsaiconst.png", fig)
+save("output/comp_bonsaipd.png", fig)
