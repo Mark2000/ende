@@ -57,7 +57,7 @@ if pdcontrol
     controlfnfactory = planarpdcontrolfactory
     # samplecontrol() = [0.002; 0.01]
     samplecontrol() = [rand()*0.005; rand()*0.03]
-    pbias = 0.5
+    pbend = 0.03
 end
 
 fullcontrol = false

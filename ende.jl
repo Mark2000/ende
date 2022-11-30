@@ -335,7 +335,9 @@ function bonsairrt(
     tmod = nothing,
     kmod = nothing,
     globalbranchimprovement = false,
+    timeout=Inf
 )
+    timeoutstart = time()
     xstart = statestart(prob)
     xgoal = stategoal(prob)
 
@@ -348,6 +350,9 @@ function bonsairrt(
     for iter = 1:n
         if mod(iter, 1000) == 0
             @info "on step" iter
+        end
+        if time() - timeoutstart > timeout
+            break
         end
 
         if imin > 1 && rand() < pbend
