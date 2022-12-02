@@ -1,8 +1,8 @@
 using Makie.GeometryBasics
-using GLMakie
+using CairoMakie
 using FileIO
 
-Axis = GLMakie.Axis
+Axis = CairoMakie.Axis
 
 include("ende.jl")
 
@@ -13,11 +13,12 @@ function roadmapplot2d(ax::Axis, path, roadmap, states, controls, prob::Attitude
     t_path = [timecost(roadmap, controls, p) for p in path]
     d_path = [distfn(states[p], stategoal(prob)) for p in path]
 
-    linesegments!(ax, d_rm, t_rm, color=:lightgrey)
-    lines!(ax, d_path, t_path, color=:red)
-    scatter!(ax, [d_path[1]], [0], color=:red, markersize=20)
     lines!(ax, [0,0], [0, max(t_rm...)], color=:green)
-    ax.xlabel = "Dist. to Goal"
+    linesegments!(ax, d_rm, t_rm, color=:lightgrey, linewidth=1)
+    lines!(ax, d_path, t_path, color=:red)
+    scatter!(ax, [d_path[1]], [0], color=:red)
+    scatter!(ax, [d_path[end]], [t_path[end]], color=:red, marker=:xcross, markersize=15)
+    ax.xlabel = L"$d$ to $\vec{x}_{goal}"
     ax.ylabel = "Path Length [s]"
     return ax
 end
@@ -130,7 +131,7 @@ function latlongkeepout(ax, sol, prob::AttitudeProblem)
         longs = Real[]
         lats = Real[]
         for (t, x) in zip(sol.t, sol.u)
-            rotm = QuatRotation(normalize(inv(fromscalarlast(x.q))))
+            rotm = QuatRotation(inv(fromscalarlast(normalize(x.q))))
             sensorvec = rotm*keepout.sensor
             newlong = atand(sensorvec[2],sensorvec[1])
             if length(longs) > 0 && abs(longs[end]-newlong)>90
@@ -141,6 +142,8 @@ function latlongkeepout(ax, sol, prob::AttitudeProblem)
             push!(lats, atand(sensorvec[3], norm(sensorvec[1:2])))
         end
         lines!(ax, longs, lats, color=color)
+        scatter!(ax, [longs[1]], [lats[1]], color=color)
+        scatter!(ax, [longs[end]], [lats[end]], color=color, marker=:xcross, markersize=15)
     end
     ax.xlabel = "Longitude [deg]"
     ax.ylabel = "Latitude [deg]"

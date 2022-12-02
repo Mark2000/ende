@@ -12,12 +12,17 @@ timeout = 200
 
 cases["rrt-const"] = Dict(:controlfnfact => planarcontrolfactory, :samplecontrol => ()->randinunit(2), :timeout => timeout, :pbend => 0, :biasfactor => Inf)
 cases["rrt-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :pbend => 0, :biasfactor => Inf)
-
-cases["softmax-const"] = Dict(:controlfnfact => planarcontrolfactory, :samplecontrol => ()->randinunit(2), :timeout => timeout, :pbend => 0)
-cases["softmax-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :pbend => 0)
+#
+# cases["softmax-const"] = Dict(:controlfnfact => planarcontrolfactory, :samplecontrol => ()->randinunit(2), :timeout => timeout, :pbend => 0)
+# cases["softmax-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :pbend => 0)
 
 cases["bonsai-const"] = Dict(:controlfnfact => planarcontrolfactory, :samplecontrol => ()->randinunit(2), :timeout => timeout)
 cases["bonsai-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout)
+
+# cases["bonsaibiasmax-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :biasfactor => Inf)
+# cases["bonsaibendmax-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :bendfactor => Inf)
+#
+# cases["bonsaibiasbendmax-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :biasfactor => Inf, :bendfactor => Inf)
 
 
 outputs = Dict{String,Union{Symbol,Function}}()
@@ -93,7 +98,8 @@ FileIO.save(string("benchmark_",now(),".jld2"),"run",[out,cases])
 
 
 # Boxplots
-groupings = [["rrt-const","rrt-pd"],["softmax-const","softmax-pd"],["bonsai-const","bonsai-pd"]]
+# groupings = [["rrt-const","rrt-pd"],["softmax-const","softmax-pd"],["bonsai-const","bonsai-pd"]]
+groupings = [["bonsai-pd"],["bonsaibiasmax-pd"],["bonsaibendmax-pd"],["bonsaibiasbendmax-pd"]]
 results = ["error","cost","treesize"]
 fig = Figure()
 for (axi, result) in enumerate(results)

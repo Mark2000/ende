@@ -30,50 +30,37 @@ distfn(x1, x2) = distB(x1, x2, prob.B, 30, 0, 0)
 
 pbias = 0.66
 kbias = 25
-biasfactor = 20
+biasfactor = Inf
 
 pbend = 0.03
 kbend = 50
-bendfactor = 20
+bendfactor = Inf
 tmod = 0.1
 kmod = nothing
 globalbranchimprovement = true
 
-standardrrt = false
-if standardrrt
-    pbend = 0.
-    # biasfactor = Inf
-end
+alg_mode = "bonsai"
+control_mode = "pd"
 
-lqrcontrol = false
-if lqrcontrol
-    controlfnfactory = lqrcontrolfactory
-    samplecontrol() = [0]
-    kbias = 25 # still get random times
-end
-
-pdcontrol = true
-if pdcontrol
-    controlfnfactory = planarpdcontrolfactory
-    # samplecontrol() = [0.002; 0.01]
-    samplecontrol() = [rand()*0.005; rand()*0.03]
+if alg_mode == "rrt"
+    pbend = 0
+elseif alg_mode == "bonsai"
     pbend = 0.03
 end
 
-fullcontrol = false
-if fullcontrol
-    controlfnfactory = fullcontrolfactory
-    samplecontrol() = randinunit(3) * m_max * Bmag
+if control_mode == "const"
+    controlfnfactory = planarcontrolfactory
+    samplecontrol() = randinunit(2)
+elseif control_mode == "pd"
+    controlfnfactory = planarpdcontrolfactory
+    samplecontrol() = [rand()*0.005; rand()*0.03]
 end
 
+
 path, roadmap, states, controls = bonsairrt(prob, controlfnfactory, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, kbias, biasfactor, pbend, kbend, bendfactor;
-                                            tmod=tmod, kmod=kmod, globalbranchimprovement=globalbranchimprovement)# suffix = "lqrtest"
+                                            tmod=tmod, kmod=kmod, globalbranchimprovement=globalbranchimprovement)
 
-suffix = "pd"
-
-# δₛ = 0.05
-# δbn = 2δₛ
-# path, roadmap, states, controls = sst(prob, samplecontrol, samplestate, sampletime, distfn, n, ϵ, δbn, δₛ, pbias)
+suffix = string(alg_mode,"-",control_mode)
 
 # POSTPROCESSING
 framerate = 10
@@ -85,36 +72,69 @@ comparison = states[path[end]]
 sol = resamplesolution(prob, ufun, tmax, saveat=saveat, comparison=comparison, tstops=tstops)
 
 # PLOTTING
-fig = Figure(resolution=(1280,550).*2, fontsize=24)
+
+CairoMakie.activate!()
+
+fig = Figure(resolution=(600,600), font = "CMU Serif")
 ax1 = Axis(fig[1,1])
 roadmapplot2d(ax1, path, roadmap, states, controls, prob, distfn)
-ax2 = Axis3(fig[1,2])
-roadmapplot3d(ax2, path, roadmap, states, controls, prob)
-ax2.azimuth = -1.25
-ax2.elevation = 0.5
-save("output/roadmap_$(suffix).png", fig)
+# ax2 = Axis3(fig[1,2])
+# roadmapplot3d(ax2, path, roadmap, states, controls, prob)
+# ax2.azimuth = -1.25
+# ax2.elevation = 0.5
+save("output/roadmap_$(suffix).pdf", fig)
+
 
 saveas = "output/time_animation_$(suffix).mp4"
 saveanimation(sol, ufun, prob, saveas, framerate)
 
-fig = Figure(resolution=(800,600).*2, fontsize=24)
+
+fig = Figure(resolution=(800,600), font = "CMU Serif")
 ax1 = Axis(fig[1,1])
-[lines!(ax1, sol.t, [(QuatRotation(normalize(inv(fromscalarlast(x.q))))*x.ω)[i]*180/π for x in sol.u]) for i in 1:3]
-ax1.ylabel = "ω [deg/s]"
+[lines!(ax1, sol.t, [(QuatRotation(normalize(inv(fromscalarlast(x.q))))*x.ω)[i]*180/π for x in sol.u], label=l) for (i, l) in enumerate([L"$\omega_x$", L"$\omega_y$", L"$\omega_z$"])]
+ax1.ylabel = L"$ω$ [deg/s]"
+fig[1,2] = Legend(fig, ax1)
 
 ax2 = Axis(fig[2,1])
-[lines!(ax2, sol.t, [(QuatRotation(normalize(inv(fromscalarlast(x.q))))*ufun(t, [], x))[i] for (t,x) in zip(sol.t, sol.u)]) for i in 1:3]
-ax2.ylabel = "L [N⋅m]"
+roll = [atand(2(x.q[4]*x.q[1]+x.q[2]*x.q[3]), 1-2(x.q[1]^2+x.q[2]^2)) for x in sol.u]
+pitch = [asind(2(x.q[4]*x.q[2]-x.q[3]*x.q[1])) for x in sol.u]
+yaw = [atand(2(x.q[4]*x.q[3]+x.q[1]*x.q[2]), 1-2*(x.q[2]^2+x.q[3]^2)) for x in sol.u]
+
+lines!(ax2, sol.t, roll, label=L"$\phi$")
+lines!(ax2, sol.t, pitch, label=L"$\theta$")
+lines!(ax2, sol.t, yaw, label=L"$\psi$")
+lines!(ax2, sol.t, [2*acosd(x.q[4]) for x in sol.u], label="Eig. Ang.", color=:black)
+ax2.ylabel = L"Angle [deg]$ $"
+fig[2,2] = Legend(fig, ax2)
 
 ax3 = Axis(fig[3,1])
-[lines!(ax3, sol.t, [x.q[i] for x in sol.u]) for i in 1:4]
-ax3.ylabel = "q [-]"
+# ax3.ytickformat =
+[lines!(ax3, sol.t, [(QuatRotation(normalize(inv(fromscalarlast(x.q))))*ufun(t, [], x))[i] for (t,x) in zip(sol.t, sol.u)], label=l) for (i, l) in enumerate([L"$L_x$", L"$L_y$", L"$L_z$"])]
+ax3.ylabel = L"$\vec{L}$ [N⋅m]"
+fig[3,2] = Legend(fig, ax3)
 
 ax3.xlabel = "Time [s]"
 linkxaxes!(ax1,ax2,ax3)
-save("output/solutiondynamics_$(suffix).png", fig)
+save("output/solutiondynamics_$(suffix).pdf", fig)
 
-fig = Figure(resolution=(800,600).*2, fontsize=24)
-ax4 = Axis(fig[1,1])
-latlongkeepout(ax4, sol, prob)
-save("output/latlong_$(suffix).png", fig)
+
+fig = Figure(resolution=(800,400), font = "CMU Serif")
+ax1 = Axis(fig[1,1], yscale=log10)
+lines!(ax1, sol.t, [2*acosd(abs(x.q[4])) for x in sol.u], label="Eig. Angle")
+ax1.ylabel = L"Eig. Angle [deg] $$"
+
+ax2 = Axis(fig[2,1], yscale=log10)#, backgroundcolor = :transparent, yaxisposition = :right)
+lines!(ax2, sol.t[2:end], [norm(x.ω)*180/π for x in sol.u[2:end]])
+ax2.ylabel = L"$|\vec{\omega}|$ [deg/s]"
+
+ax2.xlabel = "Time [s]"
+# hidexdecorations!(ax2)
+# hidespines!(ax2)
+linkxaxes!(ax1,ax2)
+save("output/convergence_$(suffix).pdf", fig)
+
+
+fig = Figure(resolution=(800,600), font = "CMU Serif")
+ax = Axis(fig[1,1])
+latlongkeepout(ax, sol, prob)
+save("output/latlong_$(suffix).pdf", fig)

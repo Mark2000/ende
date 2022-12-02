@@ -4,14 +4,22 @@ using LinearAlgebra
 using Optim
 using Quaternions
 using Random
-using Rotations
 using StatsBase
 using ControlSystemsBase
 
 Quaternion = Quaternions.Quaternion
+function QuatRotation(q::Quaternion)
+    qw = q.s
+    qx = q.v1
+    qy = q.v2
+    qz = q.v3
+    [1-2*qy^2-2*qz^2 2*qx*qy-2*qz*qw 2*qx*qz+2*qy*qw
+     2*qx*qy+2*qz*qw 1-2*qx^2-2*qz^2 2*qy*qz-2*qx*qw
+     2*qx*qz-2*qy*qw 2*qy*qz+2*qx*qw 1-2*qx^2-2*qy^2]
+end
 
 # Random Element Generation Functions
-randquat() = normalize(Quaternion(randn(4)...)) # random unit quaternion
+randquat() = Quaternion(normalize(randn(4))...) # random unit quaternion
 
 randunit(n) = normalize([randn(n)...]) # random point on n-sphere
 
@@ -217,7 +225,7 @@ Base.show(io::IO, cc::ControlCommand) = print(io, "(t = $(cc.t), controlfn = $(S
 # TODO: tinit not used and always passed 0
 function planarcontrolfactory(prob::AttitudeProblem, tinit::Real, xinit::State, xtarget::State)
     function planarcontrol(t::Real, k::Vector, x::State)::Vector
-        q = normalize(fromscalarlast(x.q))
+        q = fromscalarlast(normalize(x.q))
         rotm = QuatRotation(q)
         B_B = rotm * prob.B(t)
 
@@ -239,9 +247,9 @@ function fullcontrolfactory(prob::AttitudeProblem, tinit::Real, xinit::State, xt
 end
 
 function planarpdcontrolfactory(prob::AttitudeProblem, tinit::Real, xinit::State, xtarget::State)
-    q_FI = normalize(fromscalarlast(xtarget.q))
+    q_FI = fromscalarlast(normalize(xtarget.q))
     function planarpdcontrol(t::Real, k::Vector, x::State)
-        q_BI = normalize(fromscalarlast(x.q))
+        q_BI = fromscalarlast(normalize(x.q))
         q_BF = q_BI*inv(q_FI)
         y = [q_BF.v1; q_BF.v2; q_BF.v3; x.ω-xtarget.ω]
         T = -[k[1]*I(3) k[2]*I(3)]*y
@@ -268,7 +276,7 @@ function eulereqns(dx, x, params, t)
     J = params.prob.J
     Jinv = params.prob.Jinv
     B_I = params.prob.B(t)
-    q = normalize(fromscalarlast(x.q))
+    q = fromscalarlast(normalize(x.q))
 
     L_B = params.control.controlfn(t, params.control.k, x)
 
@@ -289,7 +297,7 @@ function stepstate(state, control::ControlCommand, prob::AttitudeProblem, t0=0.0
             return sol.u[end], false
         end
         if length(prob.keepouts) > 0
-            rotm = QuatRotation(normalize(fromscalarlast(x.q)))
+            rotm = QuatRotation(fromscalarlast(normalize(x.q)))
             for keepout in prob.keepouts
                 obs_B = rotm * keepout.obstacle
                 if angle(keepout.sensor, obs_B) < keepout.halfangle
