@@ -3,10 +3,12 @@
 Application of kynodynamical motion planning algorithms to perform attitude maneuvers for a magnetorquer-actuated LEO satellite with pointing constrains.
 
 ## Description
+<img src="ende_tree.png" alt="A tree illustrated by Ende." width="200" align="right"/>
 
 todo
 
 Named after the 10c. illuminator/cartographer Ende.
+
 
 ## Authors
 
