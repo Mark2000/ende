@@ -3,27 +3,56 @@ include("endeplots.jl")
 
 using FileIO
 using Dates
-# using Polynomials
+using UnPack
 
-N = 8
+N = 100
+
+Bmag = 5e-5 # Teslas (kg/As^2)
+B_hat = [0.; 0.; 1.]
+J = [41.87 0.0 0.0; 0.0 41.87 0.0; 0.0 0.0 6.67] * 1e-3 # kg*m^2
+
+default = Dict(:B_I => B_hat * Bmag,
+               :m_max => 0.66,
+               :J => J,
+               :ωmax => 5*π/180,
+               :n => 1e6,
+               :ϵ => 0.0,
+               :samplestate => ()->ComponentArray(q = toscalarlast(randquat()), ω = randinunit(3) * ωmax),
+               :samplecontrol => ()->[rand()*0.005; rand()*0.03],
+               :sampletime => ()->rand()*25,
+               :distfn => (x1, x2)->dist(x1, x2, 30),
+               :controlfnfact => (x...)->planarpdcontrolfactory(x...),
+               :pbias => 0.66,
+               :kbias => 25,
+               :biasfactor => Inf,
+               :pbend => 0.03,
+               :kbend => 50,
+               :bendfactor => Inf,
+               :tmod => 0.1,
+               :kmod => nothing,
+               :globalbranchimprovement => true,
+               :timeout => 300
+)
 
 cases = Dict{String,Dict{Symbol,Any}}()
-timeout = 200
 
-cases["rrt-const"] = Dict(:controlfnfact => planarcontrolfactory, :samplecontrol => ()->randinunit(2), :timeout => timeout, :pbend => 0, :biasfactor => Inf)
-cases["rrt-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :pbend => 0, :biasfactor => Inf)
+# cases["rrt-const"] = Dict(:controlfnfact => planarcontrolfactory, :samplecontrol => ()->randinunit(2), :timeout => timeout, :pbend => 0, :n => 1e10)
+# cases["rrt-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :pbend => 0, :n => 1e10)
 #
-# cases["softmax-const"] = Dict(:controlfnfact => planarcontrolfactory, :samplecontrol => ()->randinunit(2), :timeout => timeout, :pbend => 0)
-# cases["softmax-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :pbend => 0)
-
-cases["bonsai-const"] = Dict(:controlfnfact => planarcontrolfactory, :samplecontrol => ()->randinunit(2), :timeout => timeout)
-cases["bonsai-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout)
-
-# cases["bonsaibiasmax-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :biasfactor => Inf)
-# cases["bonsaibendmax-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :bendfactor => Inf)
+# cases["bonsai-const"] = Dict(:controlfnfact => planarcontrolfactory, :samplecontrol => ()->randinunit(2), :timeout => timeout, :n => 1e10)
+# cases["bonsai-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :n => 1e10)
 #
-# cases["bonsaibiasbendmax-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :biasfactor => Inf, :bendfactor => Inf)
+# cases["bonsaibiasfac-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :n => 1e10, :biasfactor => 20)
+# cases["bonsaibendfac-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :n => 1e10, :bendfactor => 20)
+# #
+# cases["bonsaibiasbendfac-pd"] = Dict(:controlfnfact => planarpdcontrolfactory, :samplecontrol => ()->[rand()*0.005; rand()*0.03], :timeout => timeout, :n => 1e10, :biasfactor => 20, :bendfactor => 20)
 
+cases["bonsai-pd"] = deepcopy(default)
+cases["bonsai-pd"][:controlfnfact] = (x...)->planarpdcontrolfactory(x...)
+cases["bonsai-pd"][:samplecontrol] = ()->[rand()*0.005; rand()*0.03]
+cases["bonsai-pd"][:timeout] = Inf
+cases["bonsai-pd"][:n] = 10000
+cases["bonsai-pd"][:ϵ] = 0.05
 
 outputs = Dict{String,Union{Symbol,Function}}()
 outputs["time"] = ()->nothing
@@ -36,47 +65,9 @@ outputs["treesize"] = (path, roadmap, states, controls, prob, distfn)->length(st
 out = Dict{String,Dict{String,Vector}}(case => Dict(output => zeros(N) for output in keys(outputs)) for case in keys(cases))
 
 for case in collect(keys(cases))
-    values = cases[case]
-    @info "Benchmarking" case values
-    # Sys. Params
-    Bmag = 5e-5 # Teslas (kg/As^2)
-    B_hat = [0.; 0.; 1.]
-    B_I = B_hat * Bmag
-
-    m_max = 0.66 # A*m^2
-    J = [41.87 0.0 0.0; 0.0 41.87 0.0; 0.0 0.0 6.67] * 1e-3 # kg*m^2
-
-    ωmax = 5*π/180 # rad/s
-
-    # Alg. Params
-    n = 1000000 # using timeout
-    ϵ = 0.0
-    samplestate() = ComponentArray(q = toscalarlast(randquat()), ω = randinunit(3) * ωmax)
-    samplecontrol() = randinunit(2)
-    sampletime() = rand()*25
-    distfn(x1, x2) = dist(x1, x2, 30)
-    controlfnfact(x...) = planarpdcontrolfactory(x...)
-
-    pbias = 0.66
-    kbias = 25
-    biasfactor = 20
-
-    pbend = 0.03
-    kbend = 50
-    bendfactor = 20
-    tmod = 0.1
-    kmod = nothing
-    globalbranchimprovement = true
-
-    timeout = Inf
-
-    for (sym, val) in values
-        if isa(val,Function)
-            @eval $(sym)(x...) = $(val)(x...)
-        else
-            @eval $sym = $val
-        end
-    end
+    vals = cases[case]
+    @info "Benchmarking" case vals
+    @unpack B_I, m_max, J, ωmax, n, ϵ, samplestate, samplecontrol, sampletime, distfn, controlfnfact, pbias, kbias, biasfactor, pbend, kbend, bendfactor, tmod, kmod, globalbranchimprovement, timeout = vals
 
     Threads.@threads for i in 1:N
         # prob = AttitudeProblem(Bmag, m_max, J, ωmax, randquat(), Keepout[])
@@ -98,8 +89,8 @@ FileIO.save(string("benchmark_",now(),".jld2"),"run",[out,cases])
 
 
 # Boxplots
-# groupings = [["rrt-const","rrt-pd"],["softmax-const","softmax-pd"],["bonsai-const","bonsai-pd"]]
-groupings = [["bonsai-pd"],["bonsaibiasmax-pd"],["bonsaibendmax-pd"],["bonsaibiasbendmax-pd"]]
+groupings = [["rrt-const","rrt-pd"],["bonsai-const","bonsai-pd"]]
+# groupings = [["bonsai-pd","bonsaibiasfac-pd","bonsaibendfac-pd","bonsaibiasbendfac-pd"]]
 results = ["error","cost","treesize"]
 fig = Figure()
 for (axi, result) in enumerate(results)
@@ -115,7 +106,7 @@ end
 
 
 # Case Compare
-fig = Figure(resolution=(800,800).*2, fontsize=24)
+fig = Figure()
 # fig = Figure(resolution=(1280,1280), fontsize=12)
 ax1 = Axis(fig[1,1])
 ax2 = Axis(fig[1,2])

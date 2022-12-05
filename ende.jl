@@ -362,6 +362,11 @@ function bonsairrt(
         if time() - timeoutstart > timeout
             break
         end
+        if dist(states[imin], xgoal) < ϵ
+            @info "Converged within ϵ"
+            path = pathto(roadmap, length(states))
+            break
+        end
 
         if imin > 1 && rand() < pbend
             # Choose to bend the best branch if bendfactor = Inf, otherwise pick a random branch
@@ -517,11 +522,6 @@ function bonsairrt(
                         @info "Random step found new minimum:"
                     end
                     @info xnew imin dist(xnew, xgoal)
-                end
-                if dist(xnew, xgoal) < ϵ
-                    @info "Converged within ϵ"
-                    path = pathto(roadmap, length(states))
-                    break
                 end
             end
         end
