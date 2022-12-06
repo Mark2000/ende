@@ -21,7 +21,7 @@ prob = AttitudeProblem(B_I, m_max, J, ωmax, Quaternion(0.,0.,0.,1.), [Keepout([
 
 # Common Params
 n = 10000
-ϵ = 0.005
+ϵ = 0.01
 controlfnfactory = planarcontrolfactory
 samplestate() = ComponentArray(q = toscalarlast(randquat()), ω = randinunit(3) * ωmax)
 samplecontrol() = randinunit(2) # influence based on previous state?
@@ -41,6 +41,7 @@ globalbranchimprovement = true
 
 alg_mode = "bonsai"
 control_mode = "pd"
+timeout = Inf
 
 if alg_mode == "rrt"
     pbend = 0
@@ -58,7 +59,7 @@ end
 
 
 path, roadmap, states, controls = bonsairrt(prob, controlfnfactory, samplecontrol, samplestate, sampletime, distfn, n, ϵ, pbias, kbias, biasfactor, pbend, kbend, bendfactor;
-                                            tmod=tmod, kmod=kmod, globalbranchimprovement=globalbranchimprovement)
+                                            tmod=tmod, kmod=kmod, globalbranchimprovement=globalbranchimprovement, timeout=timeout)
 
 suffix = string(alg_mode,"-",control_mode)
 
@@ -75,27 +76,27 @@ sol = resamplesolution(prob, ufun, tmax, saveat=saveat, comparison=comparison, t
 
 CairoMakie.activate!()
 
-fig = Figure(resolution=(600,600), font = "CMU Serif")
+fig = Figure(resolution=(2.25,3).*72.0.*2.5, font = "CMU Serif", fontsize = 18)
 ax1 = Axis(fig[1,1])
 roadmapplot2d(ax1, path, roadmap, states, controls, prob, distfn)
 # ax2 = Axis3(fig[1,2])
 # roadmapplot3d(ax2, path, roadmap, states, controls, prob)
 # ax2.azimuth = -1.25
 # ax2.elevation = 0.5
-save("output/roadmap_$(suffix).pdf", fig)
+save("output/roadmap_$(suffix).pdf", fig, pt_per_unit=1/2.5)
 
 
-saveas = "output/time_animation_$(suffix).mp4"
-saveanimation(sol, ufun, prob, saveas, framerate)
+# saveas = "output/time_animation_$(suffix).mp4"
+# saveanimation(sol, ufun, prob, saveas, framerate)
 
 
-fig = Figure(resolution=(800,600), font = "CMU Serif")
-ax1 = Axis(fig[1,1])
+fig = Figure(resolution=(4,3).*72.0.*2.5, font = "CMU Serif", fontsize = 18)
+ax1 = Axis(fig[2,1])
 [lines!(ax1, sol.t, [(QuatRotation(normalize(inv(fromscalarlast(x.q))))*x.ω)[i]*180/π for x in sol.u], label=l) for (i, l) in enumerate([L"$\omega_x$", L"$\omega_y$", L"$\omega_z$"])]
 ax1.ylabel = L"$ω$ [deg/s]"
-fig[1,2] = Legend(fig, ax1)
+fig[2,2] = Legend(fig, ax1)
 
-ax2 = Axis(fig[2,1])
+ax2 = Axis(fig[1,1])
 roll = [atand(2(x.q[4]*x.q[1]+x.q[2]*x.q[3]), 1-2(x.q[1]^2+x.q[2]^2)) for x in sol.u]
 pitch = [asind(2(x.q[4]*x.q[2]-x.q[3]*x.q[1])) for x in sol.u]
 yaw = [atand(2(x.q[4]*x.q[3]+x.q[1]*x.q[2]), 1-2*(x.q[2]^2+x.q[3]^2)) for x in sol.u]
@@ -105,7 +106,8 @@ lines!(ax2, sol.t, pitch, label=L"$\theta$")
 lines!(ax2, sol.t, yaw, label=L"$\psi$")
 lines!(ax2, sol.t, [2*acosd(x.q[4]) for x in sol.u], label="Eig. Ang.", color=:black)
 ax2.ylabel = L"Angle [deg]$ $"
-fig[2,2] = Legend(fig, ax2)
+ax2.yticks = -180:90:180
+fig[1,2] = Legend(fig, ax2)
 
 ax3 = Axis(fig[3,1])
 # ax3.ytickformat =
@@ -115,10 +117,10 @@ fig[3,2] = Legend(fig, ax3)
 
 ax3.xlabel = "Time [s]"
 linkxaxes!(ax1,ax2,ax3)
-save("output/solutiondynamics_$(suffix).pdf", fig)
+save("output/solutiondynamics_$(suffix).pdf", fig, pt_per_unit=1/2.5)
 
 
-fig = Figure(resolution=(800,400), font = "CMU Serif")
+fig = Figure(resolution=(2.75,2.5).*72.0.*2.5, font = "CMU Serif", fontsize = 18)
 ax1 = Axis(fig[1,1], yscale=log10)
 lines!(ax1, sol.t, [2*acosd(abs(x.q[4])) for x in sol.u], label="Eig. Angle")
 ax1.ylabel = L"Eig. Angle [deg] $$"
@@ -128,13 +130,11 @@ lines!(ax2, sol.t[2:end], [norm(x.ω)*180/π for x in sol.u[2:end]])
 ax2.ylabel = L"$|\vec{\omega}|$ [deg/s]"
 
 ax2.xlabel = "Time [s]"
-# hidexdecorations!(ax2)
-# hidespines!(ax2)
 linkxaxes!(ax1,ax2)
-save("output/convergence_$(suffix).pdf", fig)
+save("output/convergence_$(suffix).pdf", fig, pt_per_unit=1/2.5)
 
 
-fig = Figure(resolution=(800,600), font = "CMU Serif")
+fig = Figure(resolution=(3.5,2.5).*72.0.*2.5, font = "CMU Serif", fontsize = 18)
 ax = Axis(fig[1,1])
 latlongkeepout(ax, sol, prob)
-save("output/latlong_$(suffix).pdf", fig)
+save("output/latlong_$(suffix).pdf", fig, pt_per_unit=1/2.5)

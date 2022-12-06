@@ -1,11 +1,11 @@
 # Ende: Motion Planning for a Magnetorquer-actuated Satellite
 
-Application of kynodynamical motion planning algorithms to perform attitude maneuvers for a magnetorquer-actuated LEO satellite with pointing constrains.
+Application of kynodynamical motion planning algorithms to perform attitude maneuvers for a magnetorquer-actuated LEO satellite with pointing constrains. Paper: TODO link
 
 ## Description
 <img src="ende_tree.png" alt="A tree illustrated by Ende." width="200" align="right"/>
 
-todo
+Demonstrates a novel path planning algorithm, Bonsai-RRT, to solving the magnetorquer-actuated LEO satellite problem.
 
 Named after the 10c. illuminator/cartographer Ende.
 
@@ -14,11 +14,8 @@ Named after the 10c. illuminator/cartographer Ende.
 
 Developed by Mark Stephenson as a final project for CU Boulder's ASEN 5254: Algorithmic Motion Planning in Fall of 2022, taught by Morteza Lahijanian.
 
-## License
-
-This project is licensed under the [NAME HERE] License - see the LICENSE.md file for details
-
 ## References
+Incomplete list, see paper for more.
 
 ### Constained Attitude Maneuvers
 * R. Calaon and H. Schaub, “Constrained Attitude Maneuvering via Modified-Rodrigues-Parameter-Based Motion Planning Algorithms,” Journal of Spacecraft and Rockets, vol. 59, no. 4, pp. 1342–1356, Jul. 2022, doi: 10.2514/1.A35294.
