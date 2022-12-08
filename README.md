@@ -1,6 +1,7 @@
 # Ende: Motion Planning for a Magnetorquer-actuated Satellite
 
-Application of kynodynamical motion planning algorithms to perform attitude maneuvers for a magnetorquer-actuated LEO satellite with pointing constrains. Paper: TODO link
+Application of kynodynamical motion planning algorithms to perform attitude maneuvers for a magnetorquer-actuated LEO satellite with pointing constrains. [The full paper is available here.](paper.pdf)
+
 
 ## Description
 <img src="ende_tree.png" alt="A tree illustrated by Ende." width="200" align="right"/>
