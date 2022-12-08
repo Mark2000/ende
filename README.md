@@ -7,6 +7,10 @@ Application of kynodynamical motion planning algorithms to perform attitude mane
 
 Demonstrates a novel path planning algorithm, Bonsai-RRT, to solving the magnetorquer-actuated LEO satellite problem.
 
+For single runs, execute `experiments.jl` with `alg_mode` and `control` mode set accordingly. Other parameters can also be changed here.
+
+For benchmark runs, execute `benchmark.jl` with cases defined in the `cases` dictionary. `benchmark.jl` includes an example of the `bonsai-pd` case setup.
+
 Named after the 10c. illuminator/cartographer Ende.
 
 
